@@ -18,7 +18,7 @@ builds:
       - arm
 
 archives:
-  - format: tar.gz
+  - formats: ["tar.gz"]
     name_template: "gpp-{{ .Os }}-{{ .Arch }}"
     files:
       - none*

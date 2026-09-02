@@ -11,7 +11,6 @@ import (
 	box "github.com/sagernet/sing-box"
 	netutils "github.com/shirou/gopsutil/v3/net"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -29,13 +28,18 @@ type App struct {
 	httpPeer *config.Peer
 	box      *box.Box
 	lock     sync.Mutex
+	pingLock sync.Mutex
+	done     chan struct{}
 }
+
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // NewApp creates a new App application struct
 func NewApp() *App {
 	conf := config.Config{}
 	app := App{
 		conf: &conf,
+		done: make(chan struct{}),
 	}
 	return &app
 }
@@ -96,10 +100,21 @@ func (a *App) systemTray() {
 }
 
 func (a *App) testPing() {
+	a.PingAll()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for {
-		a.PingAll()
-		time.Sleep(time.Second * 5)
+		select {
+		case <-a.done:
+			return
+		case <-ticker.C:
+			a.PingAll()
+		}
 	}
+}
+func (a *App) shutdown(_ context.Context) {
+	close(a.done)
+	a.Stop()
 }
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
@@ -138,22 +153,25 @@ func (a *App) startup(ctx context.Context) {
 }
 func (a *App) PingAll() {
 	a.lock.Lock()
-	if a.box != nil {
-		a.lock.Unlock()
+	running := a.box != nil
+	a.lock.Unlock()
+	if running {
 		return
 	}
-	a.lock.Unlock()
 	group := sync.WaitGroup{}
 	for i := range a.conf.PeerList {
-		if a.conf.PeerList[i].Protocol == "direct" {
+		peer := a.conf.PeerList[i]
+		if peer.Protocol == "direct" {
 			continue
 		}
 		group.Add(1)
-		peer := a.conf.PeerList[i]
-		go func() {
+		go func(p *config.Peer) {
 			defer group.Done()
-			peer.Ping = pingPort(peer.Addr, peer.Port)
-		}()
+			ms := pingPort(p.Addr, p.Port)
+			a.pingLock.Lock()
+			p.Ping = ms
+			a.pingLock.Unlock()
+		}(peer)
 	}
 	group.Wait()
 }
@@ -169,7 +187,8 @@ func (a *App) Status() *data.Status {
 
 	counters, _ := netutils.IOCounters(true)
 	for _, counter := range counters {
-		if counter.Name == "utun225" {
+		// macOS 接口名为系统分配的 utun225，Linux/Windows 使用 InterfaceName
+		if counter.Name == "utun225" || counter.Name == "gpp" {
 			status.Up = counter.BytesSent
 			status.Down = counter.BytesRecv
 		}
@@ -178,7 +197,10 @@ func (a *App) Status() *data.Status {
 }
 
 func (a *App) List() []*config.Peer {
-	list := a.conf.PeerList
+	a.pingLock.Lock()
+	defer a.pingLock.Unlock()
+	list := make([]*config.Peer, len(a.conf.PeerList))
+	copy(list, a.conf.PeerList)
 	sort.Slice(list, func(i, j int) bool { return list[i].Ping < list[j].Ping })
 	return list
 }
@@ -187,7 +209,7 @@ func (a *App) Add(token string) string {
 		a.conf.PeerList = make([]*config.Peer, 0)
 	}
 	if strings.HasPrefix(token, "http") {
-		_, err := http.Get(token)
+		resp, err := httpClient.Get(token)
 		if err != nil {
 			_, _ = runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
 				Type:    runtime.ErrorDialog,
@@ -196,9 +218,10 @@ func (a *App) Add(token string) string {
 			})
 			return err.Error()
 		}
+		_ = resp.Body.Close()
 		a.conf.SubAddr = token
 	} else {
-		err, peer := config.ParsePeer(token)
+		peer, err := config.ParsePeer(token)
 		if err != nil {
 			_, _ = runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
 				Type:    runtime.ErrorDialog,
@@ -333,12 +356,4 @@ func pingPort(host string, port uint16) uint {
 	<-start
 	result := tcPing.Result()
 	return uint(result.Avg().Milliseconds())
-}
-func httpGet(url string) ([]byte, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return io.ReadAll(resp.Body)
 }

@@ -14,7 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
+
+var subHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 var Debug atomic.Bool
 
@@ -89,7 +92,7 @@ func LoadConfig() (*Config, error) {
 	if conf.SubAddr != "" {
 		var resp *http.Response
 		var data []byte
-		resp, err = http.Get(conf.SubAddr)
+		resp, err = subHTTPClient.Get(conf.SubAddr)
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +131,7 @@ func SaveConfig(config *Config) error {
 	file, _ := json.MarshalIndent(config, "", " ")
 	return os.WriteFile(_path, file, 0o644)
 }
-func ParsePeer(token string) (error, *Peer) {
+func ParsePeer(token string) (*Peer, error) {
 	split := strings.Split(token, "#")
 	name := ""
 	if len(split) == 2 {
@@ -137,7 +140,7 @@ func ParsePeer(token string) (error, *Peer) {
 	}
 	tokenBytes, err := base64.StdEncoding.DecodeString(token)
 	if err != nil {
-		return err, nil
+		return nil, fmt.Errorf("invalid token encoding")
 	}
 	token = string(tokenBytes)
 	split = strings.Split(token, "@")
@@ -145,29 +148,29 @@ func ParsePeer(token string) (error, *Peer) {
 	switch protocol {
 	case "vless", "shadowsocks", "socks", "hysteria2":
 	default:
-		return fmt.Errorf("unknown protocol: %s", protocol), nil
+		return nil, fmt.Errorf("unknown protocol: %s", protocol)
 	}
 	if len(split) != 2 {
-		return fmt.Errorf("invalid token: %s", token), nil
+		return nil, fmt.Errorf("invalid token format")
 	}
 	split = strings.Split(split[1], "/")
 	addr := strings.Split(split[0], ":")
 	if len(addr) != 2 {
-		return errors.New("invalid addr: " + split[0]), nil
+		return nil, errors.New("invalid addr format")
 	}
 	if len(split) != 2 {
-		return fmt.Errorf("invalid token: %s", token), nil
+		return nil, fmt.Errorf("invalid token format")
 	}
 	uuid := split[1]
 	if name == "" {
 		name = fmt.Sprintf("%s:%s", addr[0], addr[1])
 	}
 	port, _ := strconv.ParseInt(addr[1], 10, 64)
-	return nil, &Peer{
+	return &Peer{
 		Name:     name,
 		Protocol: protocol,
 		Port:     uint16(port),
 		Addr:     addr[0],
 		UUID:     uuid,
-	}
+	}, nil
 }
