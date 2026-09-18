@@ -23,6 +23,13 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
+// 出站 tag：Route.Final 与"第一个出站"必须一致，统一用常量避免写错。
+const (
+	proxyTag  = "proxy"
+	httpTag   = "http"
+	directTag = "direct"
+)
+
 // directOptions 构造直连出站选项。
 // 指定通过本地 DNS 解析目标域名，使其不再是"空出站"：
 // sing-box 1.14 会拒绝 DNS 等 detour 指向空直连出站（本地 DNS 的 detour 即为 direct）。
@@ -232,7 +239,7 @@ func remoteRuleSet(tag, url string) option.RuleSet {
 		Format: C.RuleSetFormatBinary,
 		RemoteOptions: option.RemoteRuleSet{
 			URL:            url,
-			DownloadDetour: "http",
+			DownloadDetour: httpTag,
 		},
 	}
 }
@@ -251,9 +258,16 @@ func logOptions() *option.LogOptions {
 	}
 }
 
-func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []option.Rule) (*box.Box, error) {
+// BuildOptions 构造 sing-box 配置（Client 的内部实现，单独导出便于测试与排查）。
+//
+// 路由决策（当前版本的实际行为，务必与用户预期一致）：
+//   - 命中"节点自身地址/内网/geosite-cn/geoip-cn/内置 CIDR 与 Steam 域名"→ direct
+//   - 命中 sniff 出的 http、或 TCP 80/443/8080/8443（且单独选了网页节点）→ http 出站
+//   - 其余全部落到 Route.Final（= proxy，即游戏节点）：境外游戏服务器多为纯 IP + UDP，
+//     没有可匹配的域名，正是靠这条默认走向被加速
+func BuildOptions(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []option.Rule) (option.Options, error) {
 	if gamePeer == nil {
-		return nil, errors.New("未选择游戏节点")
+		return option.Options{}, errors.New("未选择游戏节点")
 	}
 	// 未单独指定网页节点时复用游戏节点：这里必须显式兜底，
 	// 否则后续 httpPeer.Domain() 会空指针 panic（旧版本在"节点被删除/订阅更新"后就会崩）。
@@ -261,11 +275,10 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 		httpPeer = gamePeer
 	}
 	proxyOut := getOUt(gamePeer)
-	// 必须是独立对象：若两个 tag 指向同一个出站，先设置的 tag 会被后一次赋值覆盖，
-	// 导致 DownloadDetour 引用的 "http" 出站不存在。
+	// 两个 tag 使用各自独立的对象，避免共用同一份出站配置带来的歧义
 	httpOut := getOUt(httpPeer)
-	httpOut.Tag = "http"
-	proxyOut.Tag = "proxy"
+	httpOut.Tag = httpTag
+	proxyOut.Tag = proxyTag
 
 	// 规则集缓存：geosite/geoip 规则集下载一次后落盘，
 	// 避免每次启动都依赖网络下载（弱网/断网时也能用缓存启动）。
@@ -274,15 +287,14 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 
 	proxyDNSServer, err := buildDNSServer("proxyDns", proxyDNS, "proxy")
 	if err != nil {
-		return nil, err
+		return option.Options{}, err
 	}
 	localDNSServer, err := buildDNSServer("localDns", localDNS, "direct")
 	if err != nil {
-		return nil, err
+		return option.Options{}, err
 	}
 
 	options := box.Options{
-		Context: include.Context(context.Background()),
 		Options: option.Options{
 			Experimental: &option.ExperimentalOptions{
 				CacheFile: &option.CacheFileOptions{
@@ -310,7 +322,7 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 					Type: "tun",
 					Tag:  "tun-in",
 					Options: &option.TunInboundOptions{
-						InterfaceName: "utun225",
+						InterfaceName: config.TunInterfaceName,
 						MTU:           9000,
 						Address: badoption.Listable[netip.Prefix]{
 							netip.MustParsePrefix("172.25.0.1/30"),
@@ -335,6 +347,11 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 			},
 			Route: &option.RouteOptions{
 				AutoDetectInterface: true,
+				// 必须显式声明默认出站：sing-box 在 route.final 为空时会静默把
+				// "第一个出站"当作默认出站（adapter/outbound/manager.go:303），
+				// 一旦有人调整 Outbounds 顺序，全机默认走向就会从"走代理"变成"直连"。
+				// 这里写死 proxy，与下方第一个出站保持一致，并由单元测试守住。
+				Final: proxyTag,
 				RuleSet: []option.RuleSet{
 					remoteRuleSet("geosite-cn", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs"),
 					remoteRuleSet("geosite-geolocation-!cn", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-!cn.srs"),
@@ -367,7 +384,7 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 				httpOut,
 				{
 					Type:    "direct",
-					Tag:     "direct",
+					Tag:     directTag,
 					Options: directOptions(),
 				},
 			},
@@ -396,19 +413,19 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 		},
 		routeRule(option.RawDefaultRule{
 			RuleSet: badoption.Listable[string]{"geosite-cn"},
-		}, "direct"),
+		}, directTag),
 		routeRule(option.RawDefaultRule{
 			RuleSet: badoption.Listable[string]{"geoip-cn"},
-		}, "direct"),
+		}, directTag),
 		routeRule(option.RawDefaultRule{
 			IPIsPrivate: true,
-		}, "direct"),
+		}, directTag),
 		routeRule(option.RawDefaultRule{
 			IPCIDR: badoption.Listable[string]{
 				"85.236.96.0/21",
 				"188.42.95.0/24",
 				"188.42.147.0/24"},
-		}, "direct"),
+		}, directTag),
 		routeRule(option.RawDefaultRule{
 			DomainSuffix: badoption.Listable[string]{
 				"vivox.com",
@@ -429,7 +446,7 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 				"steamstatic.com.8686c.com",
 				"wmsjsteam.com",
 				"xz.pphimalayanrt.com"},
-		}, "direct"),
+		}, directTag),
 	}...)
 	options.Route.Rules = append(options.Route.Rules, rules...)
 	// http
@@ -445,20 +462,31 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 			Timestamp:    true,
 			DisableColor: true,
 		}
-		content, err := options.Options.MarshalJSONContext(options.Context)
-		if err == nil {
+	}
+	return options.Options, nil
+}
+
+// Client 构造并返回可启动的 sing-box 实例（配置由 BuildOptions 生成）。
+func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []option.Rule) (*box.Box, error) {
+	opts, err := BuildOptions(gamePeer, httpPeer, proxyDNS, localDNS, rules)
+	if err != nil {
+		return nil, err
+	}
+	boxOptions := box.Options{
+		Context: include.Context(context.Background()),
+		Options: opts,
+	}
+	// debug 模式下把"实际生效的配置"落盘，排查路由问题时最有用
+	if config.Debug.Load() {
+		content, merr := opts.MarshalJSONContext(boxOptions.Context)
+		if merr == nil {
 			var buf bytes.Buffer
 			if json.Indent(&buf, content, "", " ") == nil {
 				_ = os.WriteFile(filepath.Join(config.UserDir(), "sing.json"), buf.Bytes(), 0o644)
 			}
 		}
 	}
-	var instance *box.Box
-	instance, err = box.New(options)
-	if err != nil {
-		return nil, err
-	}
-	return instance, nil
+	return box.New(boxOptions)
 }
 
 // dnsRules 构造 DNS 路由规则：选中节点自己的域名用本地 DNS 解析（否则会自己解析自己），
