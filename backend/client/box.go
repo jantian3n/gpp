@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/danbai225/gpp/backend/config"
@@ -19,6 +20,23 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
 )
+
+// directOptions 构造直连出站选项。
+// 指定通过本地 DNS 解析目标域名，使其不再是"空出站"：
+// sing-box 1.14 会拒绝 DNS 等 detour 指向空直连出站（本地 DNS 的 detour 即为 direct）。
+func directOptions() *option.DirectOutboundOptions {
+	return &option.DirectOutboundOptions{
+		DialerOptions: option.DialerOptions{
+			AbstractDialerOptions: option.AbstractDialerOptions{
+				DomainResolver: &option.DomainResolveOptions{Server: "localDns"},
+			},
+		},
+	}
+}
+
+// LogOutput 非空时，sing-box 运行日志写入该文件（info 级别），用于排查问题；
+// debug 配置开启时仍会覆盖为 trace 级别输出到 debug.log。
+var LogOutput string
 
 func multiplexOptions() *option.OutboundMultiplexOptions {
 	return &option.OutboundMultiplexOptions{
@@ -84,7 +102,7 @@ func getOUt(peer *config.Peer) option.Outbound {
 	case "direct":
 		out = option.Outbound{
 			Type:    "direct",
-			Options: &option.DirectOutboundOptions{},
+			Options: directOptions(),
 		}
 	default:
 		out = option.Outbound{
@@ -217,6 +235,20 @@ func remoteRuleSet(tag, url string) option.RuleSet {
 	}
 }
 
+// logOptions 构造日志配置：默认关闭；设置了 LogOutput 时输出到该文件。
+func logOptions() *option.LogOptions {
+	if LogOutput == "" {
+		return &option.LogOptions{Disabled: true}
+	}
+	return &option.LogOptions{
+		Disabled:     false,
+		Level:        "info",
+		Output:       LogOutput,
+		Timestamp:    true,
+		DisableColor: true,
+	}
+}
+
 func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []option.Rule) (*box.Box, error) {
 	proxyOut := getOUt(gamePeer)
 	httpOut := proxyOut
@@ -225,6 +257,12 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 	}
 	httpOut.Tag = "http"
 	proxyOut.Tag = "proxy"
+
+	// 规则集缓存：geosite/geoip 规则集下载一次后落盘，
+	// 避免每次启动都依赖网络下载（弱网/断网时也能用缓存启动）。
+	home, _ := os.UserHomeDir()
+	cachePath := filepath.Join(home, ".gpp", "cache.db")
+	_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
 
 	proxyDNSServer, err := buildDNSServer("proxyDns", proxyDNS, "proxy")
 	if err != nil {
@@ -238,9 +276,13 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 	options := box.Options{
 		Context: include.Context(context.Background()),
 		Options: option.Options{
-			Log: &option.LogOptions{
-				Disabled: true,
+			Experimental: &option.ExperimentalOptions{
+				CacheFile: &option.CacheFileOptions{
+					Enabled: true,
+					Path:    cachePath,
+				},
 			},
+			Log: logOptions(),
 			DNS: &option.DNSOptions{
 				RawDNSOptions: option.RawDNSOptions{
 					Servers: []option.DNSServerOptions{
@@ -331,7 +373,7 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 				{
 					Type:    "direct",
 					Tag:     "direct",
-					Options: &option.DirectOutboundOptions{},
+					Options: directOptions(),
 				},
 			},
 		},
@@ -348,6 +390,10 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 				},
 				RuleAction: option.RuleAction{
 					Action: C.RuleActionTypeReject,
+					// sing-box 1.14 中 reject 必须指定 method，否则处理 UDP 包时 panic
+					RejectOptions: option.RejectActionOptions{
+						Method: C.RuleActionRejectMethodDefault,
+					},
 				},
 			},
 		},

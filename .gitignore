@@ -27,3 +27,8 @@ run.log
 dist/
 config.json
 .dev
+
+# 运行时日志与排查产物（不纳入版本控制）
+*.log
+panic.log
+sing.json

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,16 @@ func NewApp() *App {
 	}
 	return &app
 }
+// capturePanic 记录后台 goroutine 的 panic 到 panic.log，
+// 避免 GUI 程序无声闪退后无任何线索。
+func capturePanic(where string) {
+	if r := recover(); r != nil {
+		_ = os.WriteFile("panic.log",
+			[]byte(fmt.Sprintf("[%s] panic: %v\n%s\n", time.Now().Format(time.RFC3339), r, debug.Stack())),
+			0o644)
+	}
+}
+
 func (a *App) systemTray() {
 	systray.SetIcon(logo) // read the icon from a file
 	show := systray.AddMenuItem("显示窗口", "显示窗口")
@@ -58,6 +69,7 @@ func (a *App) systemTray() {
 	})
 	systray.SetOnClick(func(menu systray.IMenu) { runtime.WindowShow(a.ctx) })
 	go func() {
+		defer capturePanic("systemTray")
 		listener, err := net.Listen("tcp", "127.0.0.1:54713")
 		if err != nil {
 			_, _ = runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
@@ -100,6 +112,7 @@ func (a *App) systemTray() {
 }
 
 func (a *App) testPing() {
+	defer capturePanic("testPing")
 	a.PingAll()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
