@@ -3,7 +3,6 @@ module github.com/danbai225/gpp
 go 1.25.5
 
 require (
-	github.com/cloverstd/tcping v0.1.1
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.9.0-beta.4
