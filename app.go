@@ -117,7 +117,7 @@ func (a *App) systemTray() {
 	systray.SetOnClick(func(menu systray.IMenu) { runtime.WindowShow(a.ctx) })
 	go func() {
 		defer recordPanic("systemTray")
-		listener, err := net.Listen("tcp", "127.0.0.1:54713")
+		listener, err := net.Listen("tcp", singleInstanceAddr)
 		if err != nil {
 			// 端口被占用通常意味着已有一个 gpp GUI 在运行（main.go 就是靠它实现单实例）。
 			// 这里必须 return：旧版本漏了 return，会在 nil listener 上调用 Accept 直接 panic。

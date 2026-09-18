@@ -1,18 +1,23 @@
 <script lang="ts" setup>
-import Layout from "./components/Layout.vue";
-import Progress from "./views/Index.vue";
-import HelloWorld from "./components/HelloWorld.vue";
-import Index from "./views/Index.vue";
+import TitleBar from './components/TitleBar.vue'
+import Index from './views/Index.vue'
+import {usesCustomChrome} from './composables/usePlatform'
 </script>
 
-
 <template>
-  <n-message-provider>
-    <!--  <Layout/>-->
+  <!-- Windows 上是无边框窗口，标题栏由前端绘制（见 main.go / window_windows.go）；
+       其他平台保留系统边框，这里就不再画标题栏，避免出现两条标题栏。 -->
+  <div class="app">
+    <TitleBar v-if="usesCustomChrome" title="gpp"/>
     <Index/>
-    <!--  <HelloWorld/>-->
-  </n-message-provider>
+  </div>
 </template>
 
-<style>
+<style scoped>
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
 </style>

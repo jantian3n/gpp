@@ -1,0 +1,374 @@
+/*
+ * Windows 11 / WinUI 3 设计令牌与基础控件样式。
+ *
+ * 颜色取自 WinUI 3 的主题资源。注意 WinUI 用的是 #AARRGGBB，
+ * 而 CSS 的 8 位十六进制是 #RRGGBBAA —— 顺序正好相反！
+ * 直接把 WinUI 的值抄进 CSS 会得到一堆"不透明的青色"和"全透明的文字"，
+ * 所以这里凡是带透明度的颜色一律写成 rgba()，不留歧义。
+ *
+ * 亮暗主题只用 prefers-color-scheme 切换，不引入任何 JS —— 和 Win11 原生应用
+ * 一样跟随系统设置，系统切主题时界面会立刻跟着变。
+ *
+ * 圆角：ControlCornerRadius = 4px，OverlayCornerRadius = 8px。
+ * 字体：Segoe UI Variable（Win11 的正文/标题光学尺寸），中文回退到微软雅黑 UI。
+ */
+
+/* ------------------------------------------------------------------ 亮色 */
+:root {
+  color-scheme: light dark;
+
+  /* 字体与排版。字号/行高取自 Windows 11 的字阶：
+     Caption 12/16、Body 14/20、BodyStrong 14/20 SemiBold、Subtitle 20/28 SemiBold */
+  --font-family-text: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+  "Microsoft YaHei UI", "Microsoft YaHei", system-ui, "PingFang SC", sans-serif;
+  --font-family-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI",
+  "Microsoft YaHei UI", "Microsoft YaHei", system-ui, "PingFang SC", sans-serif;
+
+  --font-caption: 400 12px/16px var(--font-family-text);
+  --font-body: 400 14px/20px var(--font-family-text);
+  --font-body-strong: 600 14px/20px var(--font-family-text);
+  --font-subtitle: 600 20px/28px var(--font-family-display);
+
+  --control-corner-radius: 4px;
+  --overlay-corner-radius: 8px;
+
+  /* Win11 标准标题栏：高 32px，按钮 46×32 */
+  --titlebar-height: 32px;
+  --caption-button-width: 46px;
+
+  /* Fluent 的缓动曲线 */
+  --ease-out: cubic-bezier(0, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.5, 0, 0.5, 1);
+
+  /* 焦点视觉：Win11 的 2px 高对比焦点框 */
+  --focus-outline: 2px solid #000000;
+
+  /* 文字（WinUI TextFillColor*：89% / 62% / 45% / 36% 黑） */
+  --text-fill-primary: rgba(0, 0, 0, 0.89);
+  --text-fill-secondary: rgba(0, 0, 0, 0.62);
+  --text-fill-tertiary: rgba(0, 0, 0, 0.45);
+  --text-fill-disabled: rgba(0, 0, 0, 0.36);
+
+  /* 强调色（Win11 默认蓝 #005FB8；悬停/按下是 90% / 80% 透明度） */
+  --accent-fill-default: #005fb8;
+  --accent-fill-secondary: rgba(0, 95, 184, 0.9);
+  --accent-fill-tertiary: rgba(0, 95, 184, 0.8);
+  --accent-fill-disabled: rgba(0, 0, 0, 0.36);
+  --accent-text-fill-primary: #ffffff;
+  --accent-text-fill-secondary: rgba(255, 255, 255, 0.9);
+
+  /* 控件底色与描边 */
+  --control-fill-default: rgba(255, 255, 255, 0.7);
+  --control-fill-secondary: rgba(249, 249, 249, 0.5);
+  --control-fill-tertiary: rgba(249, 249, 249, 0.3);
+  --control-fill-disabled: rgba(249, 249, 249, 0.3);
+  --input-active-fill: rgba(255, 255, 255, 0.7);
+  --control-stroke-default: rgba(0, 0, 0, 0.06);
+  --control-stroke-secondary: rgba(0, 0, 0, 0.16);
+  --control-strong-stroke-default: rgba(0, 0, 0, 0.45);
+
+  /* 卡片与分隔线 */
+  --card-background-fill-default: rgba(255, 255, 255, 0.7);
+  --card-background-fill-secondary: rgba(246, 246, 246, 0.5);
+  --card-stroke-default: rgba(0, 0, 0, 0.06);
+  --divider-stroke: rgba(0, 0, 0, 0.08);
+
+  /* 不透明底色（无系统材质时兜底）*/
+  --solid-background-fill-base: #f3f3f3;
+  --solid-background-fill-secondary: #eeeeee;
+
+  /* 浮出层 */
+  --surface-stroke-flyout: rgba(0, 0, 0, 0.06);
+  --acrylic-fill: rgba(249, 249, 249, 0.85);
+  --backdrop-filter: blur(30px) saturate(1.25);
+  --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14);
+  --dialog-shadow: 0 32px 64px rgba(0, 0, 0, 0.24), 0 2px 21px rgba(0, 0, 0, 0.14);
+  --smoke-fill: rgba(0, 0, 0, 0.3);
+
+  /* 语义色 */
+  --system-fill-success: #0f7b0f;
+  --system-fill-success-background: #dff6dd;
+  --system-fill-success-stroke: #0f7b0f;
+  --system-fill-caution: #9d5d00;
+  --system-fill-caution-background: #fff4ce;
+  --system-fill-caution-stroke: #9d5d00;
+  --system-fill-critical: #c42b1c;
+  --system-fill-critical-background: #fde7e9;
+  --system-fill-critical-stroke: #c42b1c;
+  --system-fill-attention: #005fb8;
+
+  --infobar-fill: var(--card-background-fill-default);
+  --infobar-stroke: var(--control-stroke-default);
+
+  --progress-track: rgba(0, 0, 0, 0.12);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.28);
+
+  /* 标题栏按钮 */
+  --caption-hover-fill: rgba(0, 0, 0, 0.06);
+  --caption-pressed-fill: rgba(0, 0, 0, 0.08);
+  --caption-close-hover-fill: #c42b1c;
+  --caption-close-pressed-fill: #b32418;
+}
+
+/* ------------------------------------------------------------------ 暗色 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --focus-outline: 2px solid #ffffff;
+
+    --text-fill-primary: #ffffff;
+    --text-fill-secondary: rgba(255, 255, 255, 0.77);
+    --text-fill-tertiary: rgba(255, 255, 255, 0.53);
+    --text-fill-disabled: rgba(255, 255, 255, 0.36);
+
+    /* 暗色的强调色是浅青 #60CDFF，配黑字 */
+    --accent-fill-default: #60cdff;
+    --accent-fill-secondary: rgba(96, 205, 255, 0.9);
+    --accent-fill-tertiary: rgba(96, 205, 255, 0.8);
+    --accent-fill-disabled: rgba(255, 255, 255, 0.16);
+    --accent-text-fill-primary: #000000;
+    --accent-text-fill-secondary: rgba(0, 0, 0, 0.9);
+
+    --control-fill-default: rgba(255, 255, 255, 0.06);
+    --control-fill-secondary: rgba(255, 255, 255, 0.08);
+    --control-fill-tertiary: rgba(255, 255, 255, 0.04);
+    --control-fill-disabled: rgba(255, 255, 255, 0.04);
+    --input-active-fill: rgba(255, 255, 255, 0.12);
+    --control-stroke-default: rgba(255, 255, 255, 0.06);
+    --control-stroke-secondary: rgba(255, 255, 255, 0.09);
+    --control-strong-stroke-default: rgba(255, 255, 255, 0.55);
+
+    /* 暗色卡片比底色略亮一点；WinUI 原值 5% 白在深色上太少，这里取 8% 保证卡片有轮廓 */
+    --card-background-fill-default: rgba(255, 255, 255, 0.08);
+    --card-background-fill-secondary: rgba(255, 255, 255, 0.04);
+    --card-stroke-default: rgba(255, 255, 255, 0.06);
+    --divider-stroke: rgba(255, 255, 255, 0.08);
+
+    --solid-background-fill-base: #202020;
+    --solid-background-fill-secondary: #1c1c1c;
+
+    --surface-stroke-flyout: rgba(255, 255, 255, 0.1);
+    --acrylic-fill: rgba(44, 44, 44, 0.85);
+    --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+    --dialog-shadow: 0 32px 64px rgba(0, 0, 0, 0.6), 0 2px 21px rgba(0, 0, 0, 0.4);
+    --smoke-fill: rgba(0, 0, 0, 0.45);
+
+    --system-fill-success: #6ccb5f;
+    --system-fill-success-background: #393d1b;
+    --system-fill-success-stroke: #6ccb5f;
+    --system-fill-caution: #fce100;
+    --system-fill-caution-background: #433519;
+    --system-fill-caution-stroke: #fce100;
+    --system-fill-critical: #ff99a4;
+    --system-fill-critical-background: #442726;
+    --system-fill-critical-stroke: #ff99a4;
+    --system-fill-attention: #60cdff;
+
+    --progress-track: rgba(255, 255, 255, 0.12);
+    --scrollbar-thumb: rgba(255, 255, 255, 0.3);
+
+    --caption-hover-fill: rgba(255, 255, 255, 0.06);
+    --caption-pressed-fill: rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* ------------------------------------------------------------------ 基础 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  /* 窗口是不透明的（见 window_windows.go：不开系统背景材质），整窗用 Win11 的
+     基准底色打底，卡片再叠在上面。 */
+  background: var(--solid-background-fill-base);
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  color: var(--text-fill-primary);
+  font: var(--font-body);
+  /* 原生应用里界面文字不可选中，只有输入框里的内容可以 */
+  user-select: none;
+  -webkit-user-drag: none;
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+p,
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+/* Win11 细滚动条：默认就是一条细轨道，悬停时加粗 */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+  border: 4px solid transparent;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+}
+
+/* ------------------------------------------------------------------ 卡片 */
+.card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border: 1px solid var(--card-stroke-default);
+  border-radius: var(--overlay-corner-radius);
+  background: var(--card-background-fill-default);
+}
+
+/* ------------------------------------------------------------------ 按钮 */
+/* Win11 标准按钮：默认 ControlFill 底 + 细描边，底边略深；悬停/按下逐级变淡 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 120px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--control-stroke-default);
+  border-bottom-color: var(--control-stroke-secondary);
+  border-radius: var(--control-corner-radius);
+  background: var(--control-fill-default);
+  color: var(--text-fill-primary);
+  font: var(--font-body);
+  /* Fluent 用箭头光标，不是手型 */
+  cursor: default;
+}
+
+.btn:hover {
+  background: var(--control-fill-secondary);
+}
+
+.btn:active {
+  background: var(--control-fill-tertiary);
+  color: var(--text-fill-secondary);
+}
+
+.btn:disabled {
+  background: var(--control-fill-disabled);
+  border-color: var(--control-stroke-default);
+  color: var(--text-fill-disabled);
+}
+
+.btn:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 1px;
+}
+
+.btn--accent {
+  border-color: transparent;
+  background: var(--accent-fill-default);
+  color: var(--accent-text-fill-primary);
+}
+
+.btn--accent:hover {
+  background: var(--accent-fill-secondary);
+}
+
+.btn--accent:active {
+  background: var(--accent-fill-tertiary);
+  color: var(--accent-text-fill-secondary);
+}
+
+.btn--accent:disabled {
+  background: var(--accent-fill-disabled);
+  color: var(--text-fill-disabled);
+}
+
+.btn--subtle {
+  min-width: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn--subtle:disabled {
+  background: transparent;
+}
+
+.btn--block {
+  width: 100%;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ 输入框 */
+.textbox {
+  width: 100%;
+  padding: 5px 11px;
+  border: 1px solid var(--control-stroke-default);
+  border-bottom-color: var(--control-stroke-secondary);
+  border-radius: var(--control-corner-radius);
+  background: var(--control-fill-default);
+  color: var(--text-fill-primary);
+  font: var(--font-body);
+  outline: none;
+  resize: none;
+}
+
+.textbox:hover {
+  background: var(--control-fill-secondary);
+}
+
+/* Win11 输入框聚焦：底色变亮，底边变成强调色 */
+.textbox:focus {
+  background: var(--input-active-fill);
+  border-bottom-color: transparent;
+  box-shadow: inset 0 -1px 0 0 var(--accent-fill-default);
+}
+
+.textbox::placeholder {
+  color: var(--text-fill-tertiary);
+}
+
+.textbox--multiline {
+  padding: 7px 11px;
+  line-height: 20px;
+}
+
+/* --------------------------------------------------------- 延迟语义色工具类 */
+/* 放在全局而不是各组件里：ComboBox 的选项和首页的节点行都用同一套配色，
+   避免基础色和语义色被组件作用域的优先级规则互相覆盖。 */
+.tone--good {
+  color: var(--system-fill-success);
+}
+
+.tone--fair {
+  color: var(--system-fill-caution);
+}
+
+.tone--poor {
+  color: var(--system-fill-critical);
+}
+
+.tone--unknown {
+  color: var(--text-fill-tertiary);
+}

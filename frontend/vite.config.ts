@@ -1,32 +1,10 @@
 import {defineConfig} from 'vite'
 import vue from '@vitejs/plugin-vue'
-import AutoImport from 'unplugin-auto-import/vite'
-import Icons from 'unplugin-icons/vite'
 
-import Components from 'unplugin-vue-components/vite'
-import {NaiveUiResolver} from 'unplugin-vue-components/resolvers'
-// https://vitejs.dev/config/
+// 界面已经改成手写的 Fluent 控件（见 src/styles/fluent.css），
+// 不再需要 naive-ui 的按需引入/自动导入插件。
 export default defineConfig({
     plugins: [
         vue(),
-        AutoImport({
-            imports: [
-                'vue',
-                {
-                    'naive-ui': [
-                        'useDialog',
-                        'useMessage',
-                        'useNotification',
-                        'useLoadingBar'
-                    ]
-                }
-            ]
-        }),
-        Components({
-            resolvers: [NaiveUiResolver()]
-        }),
-        Icons(),
     ]
 })
-
-

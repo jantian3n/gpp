@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"sort"
 	"strings"
@@ -374,7 +373,7 @@ func (e *Engine) PingAll() {
 		group.Add(1)
 		go func(p *config.Peer) {
 			defer group.Done()
-			ms := pingPort(p.Addr, p.Port)
+			ms := measureLatency(p.Protocol, p.Addr, p.Port)
 			e.pingLock.Lock()
 			p.Ping = ms
 			e.pingLock.Unlock()
@@ -478,15 +477,4 @@ func copyPeer(p *config.Peer) *config.Peer {
 	}
 	clone := *p
 	return &clone
-}
-
-// pingPort 单次 TCP 探测延迟（毫秒）；失败返回 0。
-func pingPort(host string, port uint16) uint {
-	start := time.Now()
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 3*time.Second)
-	if err != nil {
-		return 0
-	}
-	_ = conn.Close()
-	return uint(time.Since(start).Milliseconds())
 }
