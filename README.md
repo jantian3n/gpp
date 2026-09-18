@@ -2,8 +2,6 @@
 
 基于 [gpp](https://github.com/danbai225/gpp) 二次开发的加速器，核心使用 [sing-box](https://github.com/SagerNet/sing-box)，GUI 使用 [wails](https://github.com/wailsapp/wails) 编写，支持 Windows、Linux、macOS。
 
-[QQ 交流群 936204503](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=syMCYJm6Isz_yAxUfrQetpNGioUdpdjO&authKey=lkUyXpKkdAzUwOZYq0m%2BH5Y%2FvAU3XegyxWTm5fM1%2BxOZDdBHJUF%2BODVeNg9MraDl&noverify=0&group_code=936204503) ｜ [TG 交流群](https://t.me/+3cX2FOX_owA1ODM1)
-
 ## 功能特性
 
 - 基于 TUN 代理，全机流量接管
@@ -16,33 +14,30 @@
 
 ## 截图
 
-界面为 Windows 11 原生风格：无边框窗口 + 自绘标题栏，字体（Segoe UI Variable）、圆角（4px 控件 / 8px 卡片）、强调色遵循 WinUI 设计令牌，亮暗配色跟随系统主题（切换后立即生效）。下图是深色主题。
+Windows 11 原生 Fluent 风格：无边框窗口 + 自绘标题栏，亮暗配色跟随系统主题。下图是深色主题。
 
 | 未开始 | 加速中 |
 | --- | --- |
 | ![未开始](docs/screenshot-idle.png) | ![加速中](docs/screenshot-running.png) |
 
-界面里的元素：
-
-- **状态卡**：未连接 / 正在启动 / 加速中，带状态指示点与不确定进度条；下面一行说明当前为什么是这个状态。
-- **线路卡**：`Game` 与 `Http` 两行，点击任意一行打开节点窗口；右侧显示该节点延迟。
-- **流量磁贴**：加速中显示上/下行实时速率与本次累计流量。
-- **底部**：隧道由哪个进程持有（PID）与配置文件路径（可选中复制，便于排查）。
+界面元素：**状态卡**（未连接 / 正在启动 / 加速中）、**线路卡**（`Game` / `Http` 两行，点击打开节点窗口）、**流量磁贴**（实时速率与累计流量）、底部显示隧道进程 PID 与配置文件路径（可选中复制）。
 
 # 快速开始
 
 ## 1. 搭建服务端
 
-在优质线路的服务器上运行安装脚本（仅支持 Linux）：
+在优质线路的 Linux 服务器上以 root 运行一键脚本，完成后会输出导入链接，粘贴到客户端即可。
+
+Debian / Ubuntu（推荐：默认 hysteria2，自动配置防火墙、BBR、systemd 服务并开机自启，可重复执行）：
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/danbai225/gpp/main/server/install.sh)
+curl -fsSL https://raw.githubusercontent.com/jantian3n/gpp/main/server/install-debian.sh | bash
 ```
 
-安装完成后根据提示操作，会输出导入链接。然后执行以下命令启动服务端：
+其他发行版（交互式，脚本结束时按提示执行 `run.sh start` 启动）：
 
 ```bash
-/usr/local/gpp/run.sh start
+bash <(curl -sL https://raw.githubusercontent.com/jantian3n/gpp/main/server/install.sh)
 ```
 
 ## 2. 运行客户端

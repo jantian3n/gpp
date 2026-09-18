@@ -3,7 +3,7 @@
 # 默认安装 hysteria2 协议（UDP/QUIC，适合游戏加速；弱网抗丢包）
 #
 # 用法:
-#   curl -fsSL https://raw.githubusercontent.com/danbai225/gpp/main/server/install-debian.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jantian3n/gpp/main/server/install-debian.sh | bash
 # 或本地下载后:
 #   bash install-debian.sh [--protocol hysteria2] [--port 5123] [--addr 0.0.0.0] \
 #                          [--name vps] [--path /usr/local/gpp] [--net-addr IP:端口]
@@ -84,7 +84,8 @@ else
     URLS=(
         "https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
         "https://ghproxy.net/https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
-        "https://mirror.ghproxy.com/https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
+        "https://gh-proxy.com/https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
+        "https://ghfast.top/https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
     )
     ok=""
     for url in "${URLS[@]}"; do
