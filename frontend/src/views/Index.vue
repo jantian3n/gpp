@@ -43,10 +43,16 @@
                   <n-gradient-text v-if="down" type="success">
                     {{ down / 1024 > 1024 ? (down / 1024 / 1024).toFixed(2) + 'MB' : (down / 1024).toFixed(2) + 'KB' }}
                   </n-gradient-text>
+                  <span v-if="downRate">（{{ humanRate(downRate) }}/s）</span>
                 </p>
               </n-space>
             </n-space>
           </n-progress>
+        </n-space>
+        <n-space vertical size="small" style="align-items: center">
+          <span style="color: #7a7a7a; font-size: 12px">
+            {{ coreLabel }}
+          </span>
         </n-space>
         <n-space>
           <n-button :disabled="btnDisabled" @click="onMainButton()" style="margin-left: 110px">
@@ -101,6 +107,7 @@
 <script lang="ts" setup>
 import {ref, defineComponent, Ref, reactive, onMounted, watch} from 'vue'
 import {Add, List, SetPeer, Start, Status, Stop} from "../../wailsjs/go/main/App";
+import {EventsOn} from "../../wailsjs/runtime";
 import {SelectOption, SelectGroupOption} from 'naive-ui'
 import {onBeforeMount} from "@vue/runtime-core";
 import {useMessage} from 'naive-ui'
@@ -121,6 +128,16 @@ const gamePeer: Ref<any> | null = ref(null)
 const httpPeer: Ref<any> | null = ref(null)
 const up = ref()
 const down = ref()
+const downRate = ref()
+const coreLabel = ref('')
+
+// humanRate 把字节/秒格式化成可读文本
+const humanRate = (bytes: number) => {
+  if (!bytes) return '0B'
+  if (bytes > 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + 'MB'
+  if (bytes > 1024) return (bytes / 1024).toFixed(1) + 'KB'
+  return bytes + 'B'
+}
 
 const showGameHttpInfo = ref(true)
 const showUpDowInfo = ref(false)
@@ -133,6 +150,15 @@ onMounted(() => {
   time.value = setInterval(() => {
     getStatus()
   }, 1000);
+  // 核心事件（另一端界面做的操作、订阅回退、自动切换节点等）立即提示，不用等轮询
+  EventsOn('gpp:event', (event: any) => {
+    if (!event || !event.message) return
+    if (event.type === 'warning') {
+      message.warning(event.message)
+    } else if (event.type === 'started' || event.type === 'stopped') {
+      message.info(event.message)
+    }
+  })
 })
 
 onBeforeMount(() => {
@@ -231,6 +257,12 @@ const getStatus = () => {
     // 后端的一次性提示（订阅更新失败、选中节点被自动切换等），提示一次即清空
     if (res.warning) {
       message.warning(res.warning)
+    }
+    downRate.value = res.down_rate
+    // 说明"隧道由谁持有"：GUI 与 TUI 共用同一份状态，这里让用户看得见
+    if (res.core_pid) {
+      const who = res.core_kind === 'gui' ? '本窗口' : (res.core_kind === 'tui' ? '终端版 gpp-tui' : res.core_kind)
+      coreLabel.value = `核心：${who}（PID ${res.core_pid}）· 配置：${res.config_path}`
     }
     if (res.game_peer !== null || res.http_peer !== null) {
       gamePeer.value = res.game_peer

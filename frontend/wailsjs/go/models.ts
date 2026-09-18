@@ -33,7 +33,14 @@ export namespace data {
 	    http_peer?: config.Peer;
 	    up: number;
 	    down: number;
+	    up_rate: number;
+	    down_rate: number;
 	    warning: string;
+	    core_kind: string;
+	    core_pid: number;
+	    log_path: string;
+	    config_path: string;
+	    peer_count: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
@@ -46,7 +53,14 @@ export namespace data {
 	        this.http_peer = this.convertValues(source["http_peer"], config.Peer);
 	        this.up = source["up"];
 	        this.down = source["down"];
+	        this.up_rate = source["up_rate"];
+	        this.down_rate = source["down_rate"];
 	        this.warning = source["warning"];
+	        this.core_kind = source["core_kind"];
+	        this.core_pid = source["core_pid"];
+	        this.log_path = source["log_path"];
+	        this.config_path = source["config_path"];
+	        this.peer_count = source["peer_count"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

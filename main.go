@@ -25,7 +25,8 @@ func main() {
 	config.InitConfig()
 	// Create an instance of the app structure
 	app := NewApp()
-	defer app.Stop()
+	// 注：隧道的启停由 app.shutdown / 托盘菜单处理（作为前端退出时不应该停掉别人持有的隧道），
+	// 因此这里不再 defer app.Stop()。
 
 	// Create application with options
 	err = wails.Run(&options.App{

@@ -1,45 +1,41 @@
-// gpp-tui: gpp 加速器的终端客户端，带完整日志与实时状态，便于排查问题。
+// gpp-tui: gpp 加速器的终端前端。
 //
-// 用法: 以管理员身份运行 gpp-tui.exe（TUN 需要管理员权限）
-// 日志: 用户目录 ~/.gpp/gpp-tui.log（sing-box 运行日志），debug 开启后另有 debug.log
-// 配置: 与 GUI 共用同一份 config.json（可执行文件同级，或 ~/.gpp/config.json）
+// 它不直接创建隧道：真正的隧道由"核心"进程持有（谁先启动谁当核心），
+// 本程序通过本机控制面（127.0.0.1，见 backend/control）读写同一份状态，
+// 因此可以和 GUI 同时打开，两边显示与操作完全一致。
+//
+// 用法: gpp-tui.exe [-config 路径]
+// 日志: 由核心写入 ~/.gpp/gpp-tui.log（本进程是核心时生效）
 package main
 
 import (
 	"bufio"
-	"errors"
+	"context"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/danbai225/gpp/backend/client"
 	"github.com/danbai225/gpp/backend/config"
+	"github.com/danbai225/gpp/backend/control"
 	"github.com/danbai225/gpp/backend/data"
-	box "github.com/sagernet/sing-box"
 )
 
 var (
-	conf     *config.Config
-	gamePeer *config.Peer
-	httpPeer *config.Peer
-	instance *box.Box
+	handle *control.Handle
 
-	mu    sync.Mutex // 保护上面 4 个变量以及 Peer.Ping
 	state = struct {
-		lastUp, lastDown uint64
-		lastAt           time.Time
-		useANSI          bool
-		watch            bool
+		useANSI     bool
+		watch       bool
+		confirmQuit bool
+		lastError   string
 	}{}
 
 	cleanupOnce sync.Once
@@ -47,36 +43,10 @@ var (
 
 func recordPanic(where string) {
 	if r := recover(); r != nil {
-		path := filepath.Join(config.UserDir(), "panic.log")
-		_ = os.WriteFile(path,
+		_ = os.WriteFile(filepath.Join(config.UserDir(), "panic.log"),
 			[]byte(fmt.Sprintf("[%s] %s panic: %v\n%s\n", time.Now().Format(time.RFC3339), where, r, debug.Stack())),
 			0o644)
 	}
-}
-
-// snapshot 在锁内取出一份状态副本，避免与后台测速/交互命令互相踩踏。
-func snapshot() (running bool, game, http *config.Peer, peers []*config.Peer) {
-	mu.Lock()
-	defer mu.Unlock()
-	clone := func(p *config.Peer) *config.Peer {
-		if p == nil {
-			return nil
-		}
-		c := *p
-		return &c
-	}
-	peers = make([]*config.Peer, 0, len(conf.PeerList))
-	for _, p := range conf.PeerList {
-		peers = append(peers, clone(p))
-	}
-	return instance != nil, clone(gamePeer), clone(httpPeer), peers
-}
-
-func nameOf(p *config.Peer) string {
-	if p == nil {
-		return "未选择"
-	}
-	return p.Name
 }
 
 func humanBytes(n uint64) string {
@@ -105,57 +75,69 @@ func pingText(p *config.Peer) string {
 	}
 }
 
-// trafficText 返回"累计 + 实时速率"。网卡重建后计数器会归零，这里做下溢保护。
-func trafficText() string {
-	up, down := data.Traffic()
-	now := time.Now()
-	text := fmt.Sprintf("流量 ↑%s ↓%s", humanBytes(up), humanBytes(down))
-
-	mu.Lock()
-	lastUp, lastDown, lastAt := state.lastUp, state.lastDown, state.lastAt
-	state.lastUp, state.lastDown, state.lastAt = up, down, now
-	mu.Unlock()
-
-	if !lastAt.IsZero() && up >= lastUp && down >= lastDown {
-		if elapsed := now.Sub(lastAt).Seconds(); elapsed >= 0.2 {
-			text += fmt.Sprintf(" | ↑%s/s ↓%s/s",
-				humanBytes(uint64(float64(up-lastUp)/elapsed)),
-				humanBytes(uint64(float64(down-lastDown)/elapsed)))
-		}
+func nameOf(p *config.Peer) string {
+	if p == nil {
+		return "未选择"
 	}
-	return text
+	return p.Name
+}
+
+// snapshot 读取控制面状态；失败时返回一个带告警的空状态，界面不至于空白。
+func snapshot() (*data.Status, []*config.Peer) {
+	status, err := handle.Status()
+	if err != nil {
+		return &data.Status{Warning: "与核心失去连接：" + err.Error()}, nil
+	}
+	peers, err := handle.Peers()
+	if err != nil {
+		return status, nil
+	}
+	return status, peers
 }
 
 func draw() {
-	running, game, http, peers := snapshot()
+	status, peers := snapshot()
 	if state.useANSI {
-		fmt.Print("\x1b[2J\x1b[H") // 清屏 + 光标归位
+		fmt.Print("\x1b[2J\x1b[H")
 	}
 	fmt.Println("================ gpp 加速器 (TUI) ================")
-	fmt.Printf("配置: %s\n", config.Path())
-	fmt.Printf("日志: %s | debug: %v\n", client.LogOutput, config.Debug.Load())
+	role := fmt.Sprintf("本进程是核心（PID %d）", handle.Info().PID)
+	if !handle.IsOwner() {
+		role = fmt.Sprintf("已连接到核心 PID %d（来自 %s）", handle.Info().PID, handle.Info().Kind)
+	}
+	fmt.Printf("控制面: %s\n", role)
+	fmt.Printf("配置: %s\n", status.ConfigPath)
+	fmt.Printf("日志: %s\n", status.LogPath)
 	fmt.Println("--------------------------------------------------")
 	if len(peers) == 0 {
 		fmt.Println(" (还没有节点，输入 i <导入链接> 添加)")
 	}
 	for i, p := range peers {
 		var tags []string
-		if game != nil && p.Name == game.Name {
+		if status.GamePeer != nil && p.Name == status.GamePeer.Name {
 			tags = append(tags, "Game")
 		}
-		if http != nil && p.Name == http.Name {
+		if status.HttpPeer != nil && p.Name == status.HttpPeer.Name {
 			tags = append(tags, "Http")
 		}
 		fmt.Printf(" %2d  %-14s %-11s %-22s %-8s %s\n",
 			i+1, p.Name, p.Protocol, p.Address(), pingText(p), strings.Join(tags, "+"))
 	}
 	fmt.Println("--------------------------------------------------")
-	status := "未加速"
-	if running {
-		status = "加速中"
+	runState := "未加速"
+	if status.Running {
+		runState = "加速中"
 	}
-	fmt.Printf("状态: %s | Game: %s | Http: %s\n", status, nameOf(game), nameOf(http))
-	fmt.Printf("%s\n", trafficText())
+	fmt.Printf("状态: %s | Game: %s | Http: %s\n", runState, nameOf(status.GamePeer), nameOf(status.HttpPeer))
+	fmt.Printf("流量 累计 ↑%s ↓%s | 实时 ↑%s/s ↓%s/s\n",
+		humanBytes(status.Up), humanBytes(status.Down),
+		humanBytes(status.UpRate), humanBytes(status.DownRate))
+	if status.Warning != "" {
+		fmt.Println("提示:", status.Warning)
+	}
+	if state.lastError != "" {
+		fmt.Println("!!", state.lastError)
+	}
 	fmt.Println("命令: 数字=Game | h数字=Http | s=开始 | t=停止 | r=重启 | p=测速 | a=自动选最快 | i=导入 | x=删除 | w=实时监控 | d=debug | ?=帮助 | q=退出")
 }
 
@@ -163,302 +145,192 @@ func helptext() {
 	fmt.Println(`命令说明:
   1..n       选择第 n 个节点作为 Game(游戏)节点
   h1..hn     选择第 n 个节点作为 Http(网页/下载)节点
-  s / t      开始 / 停止加速
+  s / t      开始 / 停止加速（通过控制面，隧道由核心持有）
   r          重启加速（更换节点后用它生效）
-  p          测速：逐个节点做 TCP 探测（hysteria2 只监听 UDP，结果仅供参考）
+  p          立即测速一次（核心也会每 5 秒自动刷新延迟）
   a          测速后自动选择延迟最低的节点作为 Game 节点
   i <内容>   导入：gpp:// 的 base64 链接，或订阅地址
   x <序号>   删除第 n 个节点
   w          实时监控：每秒刷新状态，按回车返回
   d          切换 debug 日志（trace 级别，下次启动加速生效）
   ?          显示本帮助
-  q          退出（会先停止加速）`)
+  q          退出（本进程若是核心会先停止加速；若只是前端，加速会继续）`)
 }
 
-func syncPeers() {
-	mu.Lock()
-	defer mu.Unlock()
-	conf.Normalize()
-	gamePeer = conf.FindPeer(conf.GamePeer)
-	httpPeer = conf.FindPeer(conf.HTTPPeer)
-	if httpPeer == nil {
-		httpPeer = gamePeer
-	}
-}
-
-func saveConfig() {
-	mu.Lock()
-	defer mu.Unlock()
-	if err := config.SaveConfig(conf); err != nil {
-		fmt.Println("!! 保存配置失败:", err)
-	}
-}
-
-func selectPeer(n int, isHTTP bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	if n < 1 || n > len(conf.PeerList) {
-		fmt.Println("!! 序号超出范围（当前共", len(conf.PeerList), "个节点）")
+func setError(err error) {
+	if err == nil {
+		state.lastError = ""
 		return
 	}
-	p := conf.PeerList[n-1]
-	if isHTTP {
-		httpPeer = p
-		conf.HTTPPeer = p.Name
-		fmt.Println("Http(网页)节点 ->", p.Name)
-	} else {
-		gamePeer = p
-		conf.GamePeer = p.Name
-		fmt.Println("Game(游戏)节点 ->", p.Name)
-	}
-	if instance != nil {
-		fmt.Println("!! 加速仍在用旧节点，输入 r 重启加速后生效")
-	}
-	if err := config.SaveConfig(conf); err != nil {
-		fmt.Println("!! 保存配置失败:", err)
-	}
+	state.lastError = err.Error()
 }
 
-func startBox() {
-	mu.Lock()
-	if instance != nil {
-		mu.Unlock()
+func runCommand(fn func() error) {
+	setError(fn())
+}
+
+func startTunnel() {
+	status, _ := snapshot()
+	if status.Running {
 		fmt.Println("已在加速中（t 停止，r 重启）")
 		return
 	}
-	game, http := gamePeer, httpPeer
-	proxyDNS, localDNS, rules := conf.ProxyDNS, conf.LocalDNS, conf.Rules
-	mu.Unlock()
-
-	if game == nil {
+	if status.GamePeer == nil {
 		fmt.Println("!! 请先选择 Game 节点（或输入 i 导入节点）")
 		return
 	}
-	if !isAdmin() {
-		fmt.Println("!! 当前不是管理员身份：创建 TUN 虚拟网卡会失败，请右键“以管理员身份运行”")
+	if handle.IsOwner() && !isAdmin() {
+		fmt.Println("!! 本进程是核心，创建 TUN 虚拟网卡需要管理员权限：请以管理员身份重新运行")
 		return
 	}
 	fmt.Println("正在启动加速（首次运行需要下载 geosite/geoip 规则集，可能需要十几秒）...")
-	b, err := client.Client(game, http, proxyDNS, localDNS, rules)
-	if err != nil {
-		fmt.Println("!! 构建失败:", client.ExplainError(err))
+	if err := handle.Start(); err != nil {
+		fmt.Println("!! 加速失败:", err)
 		return
 	}
-	if err = b.Start(); err != nil {
-		_ = b.Close()
-		fmt.Println("!! 加速失败:", client.ExplainError(err))
-		return
-	}
-	mu.Lock()
-	instance = b
-	mu.Unlock()
 	fmt.Println("加速已启动")
 }
 
-// stopBox 停止加速并释放 TUN。返回是否真的停了。
-func stopBox(quiet bool) bool {
-	mu.Lock()
-	inst := instance
-	instance = nil
-	mu.Unlock()
-	if inst == nil {
-		if !quiet {
-			fmt.Println("未在加速")
-		}
-		return false
-	}
-	if err := inst.Close(); err != nil {
+func stopTunnel(quiet bool) {
+	if err := handle.Stop(); err != nil {
 		fmt.Println("!! 停止失败:", err)
-		return false
+		return
 	}
 	if !quiet {
 		fmt.Println("已停止加速")
 	}
-	return true
 }
 
-// cleanup 保证进程退出前释放 TUN（Ctrl+C、q、EOF 都走这里）。
-func cleanup() {
-	cleanupOnce.Do(func() { stopBox(true) })
+func selectPeer(n int, isHTTP bool) {
+	_, peers := snapshot()
+	if n < 1 || n > len(peers) {
+		fmt.Println("!! 序号超出范围（当前共", len(peers), "个节点）")
+		return
+	}
+	target := peers[n-1]
+	status, _ := snapshot()
+	game, httpPeer := nameOf(status.GamePeer), nameOf(status.HttpPeer)
+	if isHTTP {
+		httpPeer = target.Name
+	} else {
+		game = target.Name
+	}
+	if err := handle.Select(game, httpPeer); err != nil {
+		fmt.Println("!! 保存失败:", err)
+		return
+	}
+	if isHTTP {
+		fmt.Println("Http(网页)节点 ->", target.Name)
+	} else {
+		fmt.Println("Game(游戏)节点 ->", target.Name)
+	}
 }
 
-type pingResult struct {
-	name string
-	ms   uint
-	note string
+func importPeer(token string) {
+	if strings.TrimSpace(token) == "" {
+		fmt.Println("用法: i <gpp:// 的 base64 链接 或 订阅地址>")
+		return
+	}
+	if err := handle.Import(strings.TrimSpace(token)); err != nil {
+		fmt.Println("!! 导入失败:", err)
+		return
+	}
+	fmt.Println("导入成功")
 }
 
-// pingAll 并发探测所有节点。interactive=false 时只更新数据不打印（用于启动时的静默测速）。
-func pingAll(interactive bool) []string {
-	_, _, _, peers := snapshot()
-	results := make([]pingResult, 0, len(peers))
-	var wg sync.WaitGroup
-	var resMu sync.Mutex
-
-	for _, p := range peers {
-		if p == nil || p.Protocol == "direct" {
-			continue
-		}
-		wg.Add(1)
-		go func(p *config.Peer) {
-			defer wg.Done()
-			defer recordPanic("pingAll")
-			ms, note := pingPeer(p)
-			mu.Lock()
-			p.Ping = ms
-			mu.Unlock()
-			resMu.Lock()
-			results = append(results, pingResult{name: p.Name, ms: ms, note: note})
-			resMu.Unlock()
-		}(p)
+func deletePeer(n int) {
+	_, peers := snapshot()
+	if n < 1 || n > len(peers) {
+		fmt.Println("!! 序号超出范围")
+		return
 	}
-	wg.Wait()
-
-	if !interactive {
-		return nil
+	name := peers[n-1].Name
+	if err := handle.Delete(name); err != nil {
+		fmt.Println("!! 删除失败:", err)
+		return
 	}
-	sort.SliceStable(results, func(i, j int) bool {
-		ri, rj := results[i].ms, results[j].ms
-		if ri == 0 {
-			ri = ^uint(0)
-		}
-		if rj == 0 {
-			rj = ^uint(0)
-		}
-		return ri < rj
-	})
-	lines := make([]string, 0, len(results)+1)
-	for _, r := range results {
-		switch {
-		case r.ms == 0:
-			lines = append(lines, fmt.Sprintf("  %-14s 不可达 %s", r.name, r.note))
-		default:
-			lines = append(lines, fmt.Sprintf("  %-14s %dms %s", r.name, r.ms, r.note))
-		}
-	}
-	return lines
+	fmt.Println("已删除节点:", name)
 }
 
-// pingPeer 返回节点延迟。hysteria2 只监听 UDP，TCP 被拒说明主机在线，它的耗时只作为参考。
-func pingPeer(p *config.Peer) (uint, string) {
-	start := time.Now()
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", p.Addr, p.Port), 3*time.Second)
-	if err == nil {
-		_ = conn.Close()
-		return uint(time.Since(start).Milliseconds()), ""
-	}
-	var errno syscall.Errno
-	refused := errors.Is(err, syscall.ECONNREFUSED) ||
-		(errors.As(err, &errno) && errno == syscall.ECONNREFUSED) ||
-		strings.Contains(strings.ToLower(err.Error()), "refused")
-	if p.Protocol == "hysteria2" && refused {
-		return uint(time.Since(start).Milliseconds()), "(UDP 在线，仅供参考)"
-	}
-	return 0, fmt.Sprintf("(%v)", err)
-}
-
-// chooseFastest 测速并自动把最快的节点选为 Game 节点。
+// chooseFastest 让核心测速后自动选最快节点（并提示是否需要重启隧道）。
 func chooseFastest() {
 	fmt.Println("正在测速...")
-	pingAll(true)
-	_, _, _, peers := snapshot()
-	best := (*config.Peer)(nil)
-	for _, p := range peers {
-		if p == nil || p.Protocol == "direct" || p.Ping == 0 {
+	if err := handle.PingAll(); err != nil {
+		fmt.Println("!! 测速失败:", err)
+		return
+	}
+	for i := 0; i < 40; i++ { // 最多等 4 秒，等核心把结果写回
+		time.Sleep(100 * time.Millisecond)
+		if peers, err := handle.PeersByPing(); err == nil && len(peers) > 0 && peers[0].Ping > 0 {
+			break
+		}
+	}
+	peers, err := handle.PeersByPing()
+	if err != nil {
+		fmt.Println("!! 读取节点失败:", err)
+		return
+	}
+	var best *config.Peer
+	for _, peer := range peers {
+		if peer.Protocol == "direct" || peer.Ping == 0 {
 			continue
 		}
-		if best == nil || p.Ping < best.Ping {
-			best = p
-		}
+		best = peer
+		break
 	}
 	if best == nil {
 		fmt.Println("!! 没有测到可用节点，请检查网络或节点地址")
 		return
 	}
-	mu.Lock()
-	conf.GamePeer = best.Name
-	gamePeer = best
-	mu.Unlock()
-	fmt.Printf("已自动选择最快节点: %s (%dms)\n", best.Name, best.Ping)
-	if err := config.SaveConfig(conf); err != nil {
-		fmt.Println("!! 保存配置失败:", err)
+	status, _ := snapshot()
+	if err := handle.Select(best.Name, best.Name); err != nil {
+		fmt.Println("!! 切换失败:", err)
+		return
 	}
-	mu.Lock()
-	running := instance != nil
-	mu.Unlock()
-	if running {
+	fmt.Printf("已自动选择最快节点: %s (%dms)\n", best.Name, best.Ping)
+	if status.Running {
 		fmt.Println("!! 加速仍在用旧节点，输入 r 重启加速后生效")
 	}
 }
 
-func importPeer(token string) {
-	mu.Lock()
-	cfg := conf
-	mu.Unlock()
-	if strings.TrimSpace(token) == "" {
-		fmt.Println("用法: i <gpp:// 的 base64 链接 或 订阅地址>")
-		return
-	}
-	if err := config.AddPeer(cfg, token); err != nil {
-		fmt.Println("!! 导入失败:", err)
-		return
-	}
-	syncPeers()
-	fmt.Println("导入成功")
-}
-
-func deletePeer(n int) {
-	mu.Lock()
-	if n < 1 || n > len(conf.PeerList) {
-		mu.Unlock()
-		fmt.Println("!! 序号超出范围")
-		return
-	}
-	name := conf.PeerList[n-1].Name
-	mu.Unlock()
-
-	if err := config.DelPeer(conf, name); err != nil {
-		fmt.Println("!! 删除失败:", err)
-		return
-	}
-	syncPeers()
-	fmt.Println("已删除节点:", name)
-	mu.Lock()
-	running := instance != nil
-	mu.Unlock()
-	if running {
-		fmt.Println("!! 加速仍在用旧配置，输入 r 重启加速后生效")
-	}
-}
-
 // handle 处理一条命令，返回 (是否退出, 是否进入实时监控)。
-func handle(cmd string) (quit, watch bool) {
+func handleCommand(cmd string) (quit, watch bool) {
 	switch {
 	case cmd == "q":
-		cleanup()
+		status, _ := snapshot()
+		if status.Running && handle.IsOwner() && !state.confirmQuit {
+			state.confirmQuit = true
+			fmt.Println("加速仍在进行：再输入一次 q 确认退出（会停止加速）；输入 t 可先停止加速")
+			return false, false
+		}
+		if status.Running && !handle.IsOwner() {
+			fmt.Printf("本进程只是前端：退出后加速仍由核心（PID %d）继续，需要停止请先输入 t\n", handle.Info().PID)
+		}
+		if handle.IsOwner() {
+			stopTunnel(true)
+		}
 		fmt.Println("bye")
 		return true, false
 	case cmd == "s":
-		startBox()
+		startTunnel()
 	case cmd == "t":
-		stopBox(false)
+		stopTunnel(false)
 	case cmd == "r":
-		if stopBox(true) {
-			fmt.Println("已停止，正在用当前节点重启...")
+		if err := handle.Restart(); err != nil {
+			fmt.Println("!! 重启失败:", err)
+			return false, false
 		}
-		startBox()
+		fmt.Println("已用当前节点重启加速")
 	case cmd == "p":
 		fmt.Println("正在测速（最多 3 秒/节点）...")
-		for _, line := range pingAll(true) {
-			fmt.Println(line)
-		}
+		runCommand(handle.PingAll)
 	case cmd == "a":
 		chooseFastest()
 	case cmd == "w":
 		return false, true
 	case cmd == "d":
 		config.Debug.Store(!config.Debug.Load())
-		fmt.Println("debug =", config.Debug.Load(), "(仅本次会话生效，启动加速时写入 debug.log)")
+		fmt.Println("debug =", config.Debug.Load(), "(仅本进程生效；启动加速的核心决定日志级别)")
 	case cmd == "?":
 		helptext()
 	case strings.HasPrefix(cmd, "h"):
@@ -469,7 +341,7 @@ func handle(cmd string) (quit, watch bool) {
 		}
 		selectPeer(n, true)
 	case strings.HasPrefix(cmd, "i"):
-		importPeer(strings.TrimSpace(strings.TrimPrefix(cmd, "i")))
+		importPeer(strings.TrimPrefix(cmd, "i"))
 	case strings.HasPrefix(cmd, "x"):
 		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(cmd, "x")))
 		if err != nil {
@@ -509,49 +381,67 @@ func inputLoop() <-chan string {
 	return lines
 }
 
+// watchCoreEvents 把核心事件打印出来：GUI 里的操作在本终端也能立刻看到。
+func watchCoreEvents(ctx context.Context) {
+	defer recordPanic("watchCoreEvents")
+	events, err := handle.Events(ctx)
+	if err != nil {
+		return
+	}
+	for event := range events {
+		fmt.Printf("\n[核心] %s\n", event.Message)
+	}
+}
+
+func cleanup() {
+	cleanupOnce.Do(func() {
+		if handle == nil {
+			return
+		}
+		if handle.IsOwner() {
+			_ = handle.Stop()
+		}
+		handle.Close()
+	})
+}
+
 func main() {
 	configPath := flag.String("config", "", "指定配置文件路径（默认：可执行文件同级或 ~/.gpp/config.json）")
-	noPing := flag.Bool("no-ping", false, "启动时不自动测速")
 	flag.Parse()
 	if *configPath != "" {
 		config.SetPath(*configPath)
 	}
 
-	client.LogOutput = filepath.Join(config.UserDir(), "gpp-tui.log")
 	state.useANSI = enableANSI()
 
-	loaded, err := config.LoadConfig()
-	if loaded == nil { // LoadConfig 保证不返回 nil，这里是最后一道保险
-		loaded = config.Default()
-	}
-	conf = loaded
+	attached, err := control.Attach("tui", "dev", filepath.Join(config.UserDir(), "gpp-tui.log"))
 	if err != nil {
-		fmt.Println("!! 配置提示:", err)
+		fmt.Println("!! 无法接入 gpp 控制面:", err)
+		fmt.Println("   如果确认没有其他 gpp 在运行，可删除", control.LockPath(), "后重试")
+		return
 	}
-	syncPeers()
-
-	fmt.Println("gpp-tui 启动")
-	fmt.Println("配置:", config.Path())
-	fmt.Println("sing-box 日志:", client.LogOutput)
-	if !isAdmin() {
-		fmt.Println("!! 当前不是管理员身份，加速时会创建虚拟网卡失败，请以管理员身份重新运行")
-	}
-	if !*noPing {
-		go func() {
-			defer recordPanic("startupPing")
-			pingAll(false)
-		}()
+	handle = attached
+	if handle.IsOwner() {
+		if loadErr := handle.Engine().Load(); loadErr != nil {
+			fmt.Println("!! 配置提示:", loadErr)
+		}
 	}
 
-	// Ctrl+C / 终止信号：先释放 TUN 再退出，避免留下虚拟网卡和路由残留
+	fmt.Println("gpp-tui 启动（配置与状态由核心统一维护，可与 GUI 同时打开）")
+	if handle.IsOwner() && !isAdmin() {
+		fmt.Println("!! 本进程是核心，但当前不是管理员身份：启动加速时会创建虚拟网卡失败，请以管理员身份重新运行")
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Println("\n收到退出信号，正在停止加速...")
+		fmt.Println("\n收到退出信号，正在释放资源...")
 		cleanup()
 		os.Exit(0)
 	}()
+
+	go watchCoreEvents(context.Background())
 
 	lines := inputLoop()
 	var ticker *time.Ticker
@@ -577,7 +467,6 @@ func main() {
 			}
 			cmd := strings.TrimSpace(line)
 			if cmd == "" {
-				// 实时监控模式下按回车返回命令模式
 				state.watch = false
 				continue
 			}
@@ -587,10 +476,14 @@ func main() {
 						fmt.Println("!! 命令执行异常:", r)
 					}
 				}()
-				return handle(cmd)
+				return handleCommand(cmd)
 			}()
 			if quit {
+				cleanup()
 				return
+			}
+			if !watch {
+				state.confirmQuit = false
 			}
 			state.watch = watch
 			if state.watch {
