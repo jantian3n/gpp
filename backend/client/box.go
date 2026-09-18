@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/danbai225/gpp/backend/config"
@@ -250,18 +252,24 @@ func logOptions() *option.LogOptions {
 }
 
 func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []option.Rule) (*box.Box, error) {
-	proxyOut := getOUt(gamePeer)
-	httpOut := proxyOut
-	if httpPeer != nil {
-		httpOut = getOUt(httpPeer)
+	if gamePeer == nil {
+		return nil, errors.New("未选择游戏节点")
 	}
+	// 未单独指定网页节点时复用游戏节点：这里必须显式兜底，
+	// 否则后续 httpPeer.Domain() 会空指针 panic（旧版本在"节点被删除/订阅更新"后就会崩）。
+	if httpPeer == nil {
+		httpPeer = gamePeer
+	}
+	proxyOut := getOUt(gamePeer)
+	// 必须是独立对象：若两个 tag 指向同一个出站，先设置的 tag 会被后一次赋值覆盖，
+	// 导致 DownloadDetour 引用的 "http" 出站不存在。
+	httpOut := getOUt(httpPeer)
 	httpOut.Tag = "http"
 	proxyOut.Tag = "proxy"
 
 	// 规则集缓存：geosite/geoip 规则集下载一次后落盘，
 	// 避免每次启动都依赖网络下载（弱网/断网时也能用缓存启动）。
-	home, _ := os.UserHomeDir()
-	cachePath := filepath.Join(home, ".gpp", "cache.db")
+	cachePath := filepath.Join(config.UserDir(), "cache.db")
 	_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
 
 	proxyDNSServer, err := buildDNSServer("proxyDns", proxyDNS, "proxy")
@@ -289,20 +297,7 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 						proxyDNSServer,
 						localDNSServer,
 					},
-					Rules: []option.DNSRule{
-						dnsRouteRule(option.RawDefaultDNSRule{
-							Domain: badoption.Listable[string]{
-								gamePeer.Domain(),
-								httpPeer.Domain(),
-							},
-						}, "localDns"),
-						dnsRouteRule(option.RawDefaultDNSRule{
-							RuleSet: badoption.Listable[string]{"geosite-cn"},
-						}, "localDns"),
-						dnsRouteRule(option.RawDefaultDNSRule{
-							RuleSet: badoption.Listable[string]{"geosite-geolocation-!cn"},
-						}, "proxyDns"),
-					},
+					Rules: dnsRules(gamePeer, httpPeer),
 					Final: "proxyDns",
 					DNSClientOptions: option.DNSClientOptions{
 						Strategy:     option.DomainStrategy(C.DomainStrategyIPv4Only),
@@ -379,6 +374,8 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 		},
 	}
 
+	// 节点自身地址必须在最前面直连，避免"加速器连节点的连接又被自己抓进隧道"
+	options.Route.Rules = append(options.Route.Rules, peerDirectRules(gamePeer, httpPeer)...)
 	options.Route.Rules = append(options.Route.Rules, []option.Rule{
 		// 阻断 UDP 443，避免浏览器/应用走 QUIC 绕过代理
 		{
@@ -444,7 +441,7 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 		options.Log = &option.LogOptions{
 			Disabled:     false,
 			Level:        "trace",
-			Output:       "debug.log",
+			Output:       filepath.Join(config.UserDir(), "debug.log"),
 			Timestamp:    true,
 			DisableColor: true,
 		}
@@ -452,7 +449,7 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 		if err == nil {
 			var buf bytes.Buffer
 			if json.Indent(&buf, content, "", " ") == nil {
-				_ = os.WriteFile("sing.json", buf.Bytes(), 0o644)
+				_ = os.WriteFile(filepath.Join(config.UserDir(), "sing.json"), buf.Bytes(), 0o644)
 			}
 		}
 	}
@@ -462,4 +459,114 @@ func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []
 		return nil, err
 	}
 	return instance, nil
+}
+
+// dnsRules 构造 DNS 路由规则：选中节点自己的域名用本地 DNS 解析（否则会自己解析自己），
+// CN 域名走本地 DNS，境外域名走代理 DNS。
+func dnsRules(gamePeer, httpPeer *config.Peer) []option.DNSRule {
+	rules := make([]option.DNSRule, 0, 3)
+	if domains := peerDomains(gamePeer, httpPeer); len(domains) > 0 {
+		rules = append(rules, dnsRouteRule(option.RawDefaultDNSRule{
+			Domain: badoption.Listable[string](domains),
+		}, "localDns"))
+	}
+	return append(rules,
+		dnsRouteRule(option.RawDefaultDNSRule{
+			RuleSet: badoption.Listable[string]{"geosite-cn"},
+		}, "localDns"),
+		dnsRouteRule(option.RawDefaultDNSRule{
+			RuleSet: badoption.Listable[string]{"geosite-geolocation-!cn"},
+		}, "proxyDns"),
+	)
+}
+
+// peerDomains 收集节点里真正的域名；IP 节点会被 Domain() 过滤为空串，
+// 避免往 DNS 规则里塞"placeholder.com"这类假域名。
+func peerDomains(peers ...*config.Peer) []string {
+	seen := make(map[string]bool, len(peers))
+	domains := make([]string, 0, len(peers))
+	for _, p := range peers {
+		domain := p.Domain()
+		if domain == "" || seen[domain] {
+			continue
+		}
+		seen[domain] = true
+		domains = append(domains, domain)
+	}
+	return domains
+}
+
+// peerDirectRules 让选中节点自身的地址永远直连。
+// TUN 会接管本机全部流量，包括"加速器自己去连节点"的那条连接；
+// 不显式排除的话它会被再次送进隧道（环路风险 + 白耗节点带宽）。
+func peerDirectRules(peers ...*config.Peer) []option.Rule {
+	var cidrs []string
+	seen := make(map[string]bool, len(peers))
+	for _, p := range peers {
+		if p == nil || p.Protocol == "direct" {
+			continue
+		}
+		addr := strings.TrimSpace(p.Addr)
+		if addr == "" || seen[addr] {
+			continue
+		}
+		ip, err := netip.ParseAddr(addr)
+		if err != nil {
+			continue
+		}
+		seen[addr] = true
+		if ip.Is4() {
+			cidrs = append(cidrs, fmt.Sprintf("%s/32", ip.String()))
+		} else {
+			cidrs = append(cidrs, fmt.Sprintf("%s/128", ip.String()))
+		}
+	}
+	rules := make([]option.Rule, 0, 2)
+	if len(cidrs) > 0 {
+		rules = append(rules, routeRule(option.RawDefaultRule{
+			IPCIDR: badoption.Listable[string](cidrs),
+		}, "direct"))
+	}
+	if domains := peerDomains(peers...); len(domains) > 0 {
+		rules = append(rules, routeRule(option.RawDefaultRule{
+			Domain: badoption.Listable[string](domains),
+		}, "direct"))
+	}
+	return rules
+}
+
+// ExplainError 把 sing-box 的底层错误翻译成"用户能看懂、能行动"的中文提示，
+// 同时保留原始错误文本，方便排查。
+func ExplainError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case containsAny(msg, "access is denied", "operation not permitted", "permission denied", "administrator", "requires elevation", "wintun"):
+		return withTip(err, "创建虚拟网卡需要管理员权限：请关闭后右键选择“以管理员身份运行”再试")
+	case containsAny(msg, "raw.githubusercontent.com", "geosite", "geoip", "rule-set", "rule_set", "rule set"):
+		return withTip(err, "规则集下载失败：首次启动需要能访问 GitHub 下载 geosite/geoip，请检查网络后重试（成功下载过一次后会走本地缓存）")
+	case containsAny(msg, "only one usage of each socket address", "address already in use"):
+		return withTip(err, "本地端口被占用（127.0.0.1:5123）：可能已经有一个 gpp 实例在运行，请先退出它再试")
+	case containsAny(msg, "hysteria2", "handshake", "authentication"):
+		return withTip(err, "节点握手/认证失败：请重新导入节点链接（账号或端口可能已变更），或换一个节点")
+	case containsAny(msg, "no such host", "i/o timeout", "connection refused", "network is unreachable", "connection reset", "eof"):
+		return withTip(err, "连接节点失败：请确认节点地址/端口可达、本机网络正常")
+	default:
+		return err
+	}
+}
+
+func containsAny(s string, keys ...string) bool {
+	for _, key := range keys {
+		if strings.Contains(s, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func withTip(err error, tip string) error {
+	return fmt.Errorf("%s（原始错误：%v）", tip, err)
 }
