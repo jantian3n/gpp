@@ -40,6 +40,36 @@ bash <(curl -sL https://raw.githubusercontent.com/danbai225/gpp/main/server/inst
 点击页面上的`Game`或`Http`字样弹出节点列表窗口，在下方粘贴服务端的链接完成节点导入。
 在节点列表选择你的加速节点，如何开始加速。
 
+## 终端版客户端（gpp-tui）
+
+不方便用 GUI 的场景可以用终端版，功能对齐、日志更全、便于排查：
+
+```bash
+go build -tags with_quic -o gpp-tui.exe ./cmd/gpp-tui
+# Windows 需要以管理员身份运行（TUN 需要）
+```
+
+- 与 GUI 共用同一份 `config.json`：优先可执行文件同级目录，否则 `~/.gpp/config.json`
+- 参数：`-config <路径>` 指定配置文件，`-no-ping` 启动时不自动测速
+- 日志：`~/.gpp/gpp-tui.log`（info 级）；开启 debug 后另有 `~/.gpp/debug.log`（trace）与 `~/.gpp/sing.json`（实际生效的 sing-box 配置）
+- 常用命令：`s` 开始 / `t` 停止 / `r` 重启 / `p` 测速 / `a` 自动选最快 / `i <链接>` 导入 / `x <序号>` 删除 / `w` 实时监控 / `?` 帮助
+- Ctrl+C 会先停止加速再退出，不会留下虚拟网卡残留
+
+## 排查常见问题
+
+| 现象 | 处理 |
+| --- | --- |
+| 提示创建虚拟网卡失败 | 必须以管理员身份运行（Windows 右键“以管理员身份运行”，Linux/macOS 用 `sudo`） |
+| 提示本地端口被占用（127.0.0.1:5123） | 已经有一个 gpp（GUI 或 TUI）在运行，先退出它 |
+| 提示规则集下载失败 | 首次启动需要能访问 GitHub 下载 geosite/geoip；成功下载一次后会缓存到 `~/.gpp/cache.db`，之后断网也能启动 |
+| 订阅更新失败 | 会自动回退到上次成功拉取的缓存 `sub_cache.json`，检查网络或订阅地址 |
+| 配置写坏了 | 启动时会自动备份为 `config.json.bad-<时间>` 并重置，不会直接崩溃 |
+| 想看每条连接走了哪个节点 | `config.json` 里把 `debug` 设为 `true`，生成 trace 日志与 `sing.json` |
+
+## 节点命名约定
+
+节点名以 `game`/`http` 开头的被视为专用线路：`game` 前缀的节点不会出现在 Http 列表里，`http` 前缀的也不会出现在 Game 列表里。
+
 ## mac修复损坏
 安装后命令行执行
 ```bash

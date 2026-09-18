@@ -33,6 +33,7 @@ export namespace data {
 	    http_peer?: config.Peer;
 	    up: number;
 	    down: number;
+	    warning: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
@@ -45,6 +46,7 @@ export namespace data {
 	        this.http_peer = this.convertValues(source["http_peer"], config.Peer);
 	        this.up = source["up"];
 	        this.down = source["down"];
+	        this.warning = source["warning"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -11,21 +11,24 @@
               :percentage="percentageRef"
           >
             <n-space vertical size="small">
-              {{ percentageRef === 100 ? '加速完成' : percentageRef === 0 ? '未开始' : '正在加速' }}
+              {{ percentageRef === 100 ? '加速完成' : starting ? '正在启动…' : percentageRef === 0 ? '未开始' : '正在加速' }}
               <n-space vertical size="small" v-if="showGameHttpInfo">
                 <p @click="getList()">
                   Game:{{ gamePeer === null ? '未选择' : gamePeer.name }}
-                  <n-gradient-text v-if="gamePeer"
+                  <n-gradient-text v-if="gamePeer && gamePeer.ping > 0"
                                    :type="gamePeer.ping<60?'success':gamePeer.ping<100?'warning':'error'">
                     {{ gamePeer.ping }}
                   </n-gradient-text>
                 </p>
                 <p @click="getList()">
                   Http:{{ httpPeer === null ? '未选择' : httpPeer.name }}
-                  <n-gradient-text v-if="httpPeer"
+                  <n-gradient-text v-if="httpPeer && httpPeer.ping > 0"
                                    :type="httpPeer.ping<60?'success':httpPeer.ping<100?'warning':'error'">
                     {{ httpPeer.ping }}
                   </n-gradient-text>
+                </p>
+                <p v-if="noPeer" style="color: #7a7a7a">
+                  还没有节点：点击下方按钮导入链接或订阅地址
                 </p>
               </n-space>
               <n-space vertical size="small" v-if="showUpDowInfo">
@@ -46,7 +49,7 @@
           </n-progress>
         </n-space>
         <n-space>
-          <n-button :disabled="btnDisabled" @click="!state?start():stop()" style="margin-left: 110px">
+          <n-button :disabled="btnDisabled" @click="onMainButton()" style="margin-left: 110px">
             {{ btnText }}
           </n-button>
         </n-space>
@@ -111,6 +114,8 @@ const gameOpt = ref(Array<SelectOption | SelectGroupOption>())
 const httpOpt = ref(Array<SelectOption | SelectGroupOption>())
 const gameValue = ref()
 const httpValue = ref()
+const noPeer = ref(false)
+const starting = ref(false)
 
 const gamePeer: Ref<any> | null = ref(null)
 const httpPeer: Ref<any> | null = ref(null)
@@ -139,35 +144,51 @@ const message = useMessage()
 
 const start = () => {
   btnDisabled.value = true
+  starting.value = true
   showGameHttpInfo.value = false
   showUpDowInfo.value = true
-  btnText.value = '加速中.'
+  btnText.value = '正在启动…'
+  percentageRef.value = 0
   Start().then(res => {
+    starting.value = false
     if (res !== 'ok' && res !== 'running') {
       message.error(`加速失败:` + res)
       btnDisabled.value = false
       showUpDowInfo.value = false
       showGameHttpInfo.value = true
+      btnText.value = '开始加速'
       return;
     }
     state.value = true
-    let timer = setInterval(() => {
-      percentageRef.value += 10
-      if (percentageRef.value === 100) {
-        clearInterval(timer)
-        btnText.value = '结束加速'
-        btnDisabled.value = false
-      }
-    }, 100)
+    // 进度只反映真实状态：启动成功才到 100%
+    percentageRef.value = 100
+    btnText.value = '结束加速'
+    btnDisabled.value = false
   })
+}
+// onMainButton：没有节点时按钮直接打开导入/选择弹窗，避免"灰按钮 + 不知道怎么导入"
+const onMainButton = () => {
+  if (noPeer.value) {
+    getList()
+    return
+  }
+  if (state.value) {
+    stop()
+    return
+  }
+  start()
 }
 const stop = () => {
   Stop().then(res => {
     percentageRef.value = 0
+    starting.value = false
     state.value = false
     showGameHttpInfo.value = true
     showUpDowInfo.value = false
     btnText.value = '开始加速'
+    if (res !== 'ok' && res !== 'not running') {
+      message.error('停止失败:' + res)
+    }
   })
 }
 const getList = () => {
@@ -180,7 +201,7 @@ const getList = () => {
         return
       }
       httpOpt.value.push({
-        name: item.name + '-' + item.ping + 'ms',
+        name: peerLabel(item),
         val: item.name
       })
     })
@@ -191,27 +212,41 @@ const getList = () => {
         return
       }
       gameOpt.value.push({
-        name: item.name + '-' + item.ping + 'ms',
+        name: peerLabel(item),
         val: item.name
       })
     })
   })
 }
 
+// peerLabel 把延迟拼进选项名：测不到延迟的节点（例如只监听 UDP 的 hysteria2）显示"未测速"，
+// 不再显示成 0ms 让人误以为它最快。
+const peerLabel = (item: any) => {
+  return item.name + (item.ping > 0 ? '-' + item.ping + 'ms' : '-未测速')
+}
+
 
 const getStatus = () => {
   Status().then(res => {
+    // 后端的一次性提示（订阅更新失败、选中节点被自动切换等），提示一次即清空
+    if (res.warning) {
+      message.warning(res.warning)
+    }
     if (res.game_peer !== null || res.http_peer !== null) {
       gamePeer.value = res.game_peer
       httpPeer.value = res.http_peer
       up.value = res.up
       down.value = res.down
-      btnDisabled.value = false
-      btnText.value = state.value ? '结束加速' : '开始加速'
+      noPeer.value = false
+      if (!starting.value) {
+        btnDisabled.value = false
+        btnText.value = state.value ? '结束加速' : '开始加速'
+      }
       return;
     }
-    btnText.value = '没有节点'
-    btnDisabled.value = true
+    noPeer.value = true
+    btnText.value = '导入节点'
+    btnDisabled.value = false
   })
 }
 
@@ -228,8 +263,9 @@ const submitCallback = () => {
       if (res === 'ok') {
         message.success('导入连接成功')
         newUrl.value = undefined;
+        getList(); // 导入后立刻刷新列表，不用关掉弹窗再打开才能看到新节点
       } else {
-        message.error('导入连接失败')
+        message.error(res)
       }
     });
   }
@@ -247,10 +283,14 @@ const submitCallback = () => {
     SetPeer(gameValue.value, httpValue.value).then(res => {
       if (res === 'ok') {
         message.success('设置节点成功')
+        if (state.value) {
+          // 加速中的实例不会热切换节点，必须重启才生效，这里明确告诉用户
+          message.warning('当前正在加速：请先“结束加速”再重新开始，新节点才会生效')
+        }
         gameValue.value = undefined;
         httpValue.value = undefined;
       } else {
-        message.error('设置节点失败')
+        message.error(res)
       }
     });
   }
