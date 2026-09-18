@@ -1,23 +1,22 @@
-> **广告**：直播/游戏加速线路定制 联系：[tg](https://t.me/rand_xx231jnfasj_bot)
-> 
-
 # gpp
 
-基于[sing-box](https://github.com/SagerNet/sing-box)+[wails](https://github.com/wailsapp/wails)的加速器，使用golang编写，支持windows、linux、macos
+基于 [gpp](https://github.com/danbai225/gpp) 二次开发的加速器，核心使用 [sing-box](https://github.com/SagerNet/sing-box)，GUI 使用 [wails](https://github.com/wailsapp/wails) 编写，支持 Windows、Linux、macOS。
 
-- http分流
-- gui客户端（Windows 11 原生风格界面：无边框 + 自绘标题栏，跟随系统亮暗主题）
-- 基于tun代理
+[QQ 交流群 936204503](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=syMCYJm6Isz_yAxUfrQetpNGioUdpdjO&authKey=lkUyXpKkdAzUwOZYq0m%2BH5Y%2FvAU3XegyxWTm5fM1%2BxOZDdBHJUF%2BODVeNg9MraDl&noverify=0&group_code=936204503) ｜ [TG 交流群](https://t.me/+3cX2FOX_owA1ODM1)
+
+## 功能特性
+
+- 基于 TUN 代理，全机流量接管
+- HTTP 分流（Game / Http 两条线路独立选节点）
+- GUI 客户端（Windows 11 原生风格：无边框 + 自绘标题栏，跟随系统亮暗主题）
+- 终端版客户端（gpp-tui，功能对齐，日志更全）
 - 自定义规则
 - 节点延迟测速（按协议选探测方式，延迟按档着色）
 - 使用简单
 
-[qq交流群936204503](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=syMCYJm6Isz_yAxUfrQetpNGioUdpdjO&authKey=lkUyXpKkdAzUwOZYq0m%2BH5Y%2FvAU3XegyxWTm5fM1%2BxOZDdBHJUF%2BODVeNg9MraDl&noverify=0&group_code=936204503) [TG交流群](https://t.me/+3cX2FOX_owA1ODM1)
-# 截图
+## 截图
 
-界面按 Windows 11 原生风格重新做过：无边框窗口 + 自绘标题栏，字体（Segoe UI Variable）、
-圆角（4px 控件 / 8px 卡片）、强调色都照 WinUI 的令牌来，亮暗配色跟随系统主题。
-下图是深色主题（跟随系统，切主题会立即生效）。
+界面为 Windows 11 原生风格：无边框窗口 + 自绘标题栏，字体（Segoe UI Variable）、圆角（4px 控件 / 8px 卡片）、强调色遵循 WinUI 设计令牌，亮暗配色跟随系统主题（切换后立即生效）。下图是深色主题。
 
 | 未开始 | 加速中 |
 | --- | --- |
@@ -30,23 +29,25 @@
 - **流量磁贴**：加速中显示上/下行实时速率与本次累计流量。
 - **底部**：隧道由哪个进程持有（PID）与配置文件路径（可选中复制，便于排查）。
 
+# 快速开始
 
-# 使用教程
+## 1. 搭建服务端
 
-## 服务的搭建
+在优质线路的服务器上运行安装脚本（仅支持 Linux）：
 
-在优质线路服务器上运行安装脚本
-快速安装服务端脚本（仅支持linux）
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/danbai225/gpp/main/server/install.sh)
 ```
-然后执行/usr/local/gpp/run.sh start启动服务端
 
-根据提示安装完成后会输出导入链接
+安装完成后根据提示操作，会输出导入链接。然后执行以下命令启动服务端：
 
-# 运行客户端
+```bash
+/usr/local/gpp/run.sh start
+```
 
-[从releases下载](https://github.com/danbai225/gpp/releases)对应系统的客户端，以管理员身份运行。
+## 2. 运行客户端
+
+[从 Releases 下载](https://github.com/danbai225/gpp/releases) 对应系统的客户端，**以管理员身份运行**。
 
 - 点「线路」卡片里的 `Game` / `Http` 行打开节点窗口，在下方粘贴服务端链接即可导入节点，导入后当场就能看到延迟。
 - 选好节点按「开始加速」；加速中会显示上/下行实时速率与累计流量。
@@ -54,7 +55,7 @@ bash <(curl -sL https://raw.githubusercontent.com/danbai225/gpp/main/server/inst
 - **加速过程中不测速**（避免抢游戏流量），所以节点窗口里的「重新测速」在加速中会置灰，先「结束加速」再测。
 - 关窗口 = 隐藏到托盘（隧道继续跑），真正退出在托盘的右键菜单里。
 
-## 终端版客户端（gpp-tui）
+### 终端版客户端（gpp-tui）
 
 不方便用 GUI 的场景可以用终端版，功能对齐、日志更全、便于排查：
 
@@ -63,7 +64,7 @@ go build -tags with_quic -o gpp-tui.exe ./cmd/gpp-tui
 # Windows 需要以管理员身份运行（TUN 需要）
 ```
 
-- **GUI 与 TUI 可以同时打开，看到的是同一份状态**（见下方"架构"）
+- **GUI 与 TUI 可以同时打开，看到的是同一份状态**（见「架构」一节）
 - 与 GUI 共用同一份 `config.json`：优先可执行文件同级目录，否则 `~/.gpp/config.json`
 - 参数：`-config <路径>` 指定配置文件
 - 日志：`~/.gpp/gpp-tui.log`（info 级）；开启 debug 后另有 `~/.gpp/debug.log`（trace）与 `~/.gpp/sing.json`（实际生效的 sing-box 配置）
@@ -86,20 +87,7 @@ TUI (终端)   ─┘
 - **退出语义**：核心退出会停止加速；前端退出不影响隧道（仍由核心持有）。GUI 作为前端退出时会明确询问"仅退出窗口 / 停止加速并退出"。
 - 控制面只监听回环地址并要求 token，防止本机其他程序随意启停隧道。
 
-# 排查常见问题
-
-| 现象 | 处理 |
-| --- | --- |
-| 提示创建虚拟网卡失败 | 必须以管理员身份运行（Windows 右键“以管理员身份运行”，Linux/macOS 用 `sudo`）；注意只有**核心**进程需要管理员权限 |
-| 提示无法成为核心 / 另一个核心正在运行 | 可能已经有一个 gpp（GUI 或 TUI）在运行；确认都已退出后可删除 `~/.gpp/control.lock` 后重试 |
-| 提示本地端口被占用（127.0.0.1:5123） | 同上的多实例情况，或别的程序占用了该端口 |
-| 提示规则集下载失败 | 首次启动需要能访问 GitHub 下载 geosite/geoip；成功下载一次后会缓存到 `~/.gpp/cache.db`，之后断网也能启动 |
-| 订阅更新失败 | 会自动回退到上次成功拉取的缓存 `sub_cache.json`，检查网络或订阅地址 |
-| 节点一直显示「未测速」 | 加速中不测速（避免干扰游戏流量），先「结束加速」；另外 hysteria2 / tuic 这类**只监听 UDP** 的协议是用 ICMP 探测的，如果服务器屏蔽了 ping，就只能显示「未测速」 |
-| 配置写坏了 | 启动时会自动备份为 `config.json.bad-<时间>` 并重置，不会直接崩溃 |
-| 想看每条连接走了哪个节点 | `config.json` 里把 `debug` 设为 `true`，生成 trace 日志与 `sing.json`（内含实际生效的路由规则与默认出站） |
-
-# 现在的加速逻辑（重要）
+# 加速逻辑（重要）
 
 当前默认是"**全机流量进隧道，大陆/内网直连，其余走节点**"，规则顺序（自上而下，先命中先生效）：
 
@@ -118,31 +106,38 @@ TUI (终端)   ─┘
 
 ## 节点命名约定
 
-节点名以 `game`/`http` 开头的被视为专用线路：`game` 前缀的节点不会出现在 Http 列表里，`http` 前缀的也不会出现在 Game 列表里。
+节点名以 `game` / `http` 开头的被视为专用线路：`game` 前缀的节点不会出现在 Http 列表里，`http` 前缀的也不会出现在 Game 列表里。
 
-## mac修复损坏
-安装后命令行执行
-```bash
-sudo xattr -r -d com.apple.quarantine /Applications/gpp.app
-```
+# 常见问题排查
+
+| 现象 | 处理 |
+| --- | --- |
+| 提示创建虚拟网卡失败 | 必须以管理员身份运行（Windows 右键"以管理员身份运行"，Linux/macOS 用 `sudo`）；注意只有**核心**进程需要管理员权限 |
+| 提示无法成为核心 / 另一个核心正在运行 | 可能已经有一个 gpp（GUI 或 TUI）在运行；确认都已退出后可删除 `~/.gpp/control.lock` 后重试 |
+| 提示本地端口被占用（127.0.0.1:5123） | 同上的多实例情况，或别的程序占用了该端口 |
+| 提示规则集下载失败 | 首次启动需要能访问 GitHub 下载 geosite/geoip；成功下载一次后会缓存到 `~/.gpp/cache.db`，之后断网也能启动 |
+| 订阅更新失败 | 会自动回退到上次成功拉取的缓存 `sub_cache.json`，检查网络或订阅地址 |
+| 节点一直显示「未测速」 | 加速中不测速（避免干扰游戏流量），先「结束加速」；另外 hysteria2 / tuic 这类**只监听 UDP** 的协议是用 ICMP 探测的，如果服务器屏蔽了 ping，就只能显示「未测速」 |
+| 配置写坏了 | 启动时会自动备份为 `config.json.bad-<时间>` 并重置，不会直接崩溃 |
+| 想看每条连接走了哪个节点 | `config.json` 里把 `debug` 设为 `true`，生成 trace 日志与 `sing.json`（内含实际生效的路由规则与默认出站） |
 
 # 编译
 
 ## 编译服务端
 
-使用`golang`编译 `cmd/gpp/main.go`获得服务端可执行文件。
+使用 `golang` 编译 `cmd/gpp/main.go` 获得服务端可执行文件。
 
-## 编译GUI客户端
+## 编译 GUI 客户端
 
-gui的客户端需要自建构建，需要安装`wails`、`npm`和`golang`，安装方法如下
+GUI 客户端需要自行构建，需要安装 `wails`、`npm` 和 `golang`：
 
-- 安装`golang`，[下载地址](https://golang.org/dl/)
-- 安装`npm` [下载地址](https://nodejs.org/en/download/)
-- 安装`wails`，`go install github.com/wailsapp/wails/v2/cmd/wails@latest`
+- 安装 `golang`，[下载地址](https://golang.org/dl/)
+- 安装 `npm`，[下载地址](https://nodejs.org/en/download/)
+- 安装 `wails`：`go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 
-使用`wails`编译（`with_quic` tag 用于 hysteria2 协议支持）
+使用 `wails` 编译（`with_quic` tag 用于 hysteria2 协议支持）：
 
-```
+```bash
 wails build -m -trimpath -tags webkit2_41,with_quic
 ```
 
@@ -151,45 +146,47 @@ wails build -m -trimpath -tags webkit2_41,with_quic
 ### 改图标（有个坑）
 
 `wails build` **只在 `build/windows/icon.ico` 不存在时才会生成它**，而 `main.go` 里有
-`//go:embed build/windows/icon.ico`，直接把 ico 删掉会让构建在“生成绑定”阶段就失败。所以流程是：
+`//go:embed build/windows/icon.ico`，直接把 ico 删掉会让构建在"生成绑定"阶段就失败。所以流程是：
 
-```
-1. 替换 build/appicon.png（建议 1024x1024）
-2. pwsh build/make-ico.ps1      # 生成 256/128/64/48/32/16 六帧 ICO
-3. wails build
-```
+1. 替换 `build/appicon.png`（建议 1024x1024）
+2. `pwsh build/make-ico.ps1`（生成 256/128/64/48/32/16 六帧 ICO）
+3. `wails build`
 
 顺带一提：改完图标后资源管理器可能还显示旧图标，那是 Windows 图标缓存，重启资源管理器即可。
 
-# config解释
+# 配置说明
 
 ## 服务端
 
-配置存放为服务端二进制文件当前目录的`config.json`
+配置存放为服务端二进制文件当前目录的 `config.json`。
 
-- protocol 协议
-- port 端口
-- addr 绑定地址
-- uuid 认证用途
+| 字段 | 说明 |
+| --- | --- |
+| protocol | 协议 |
+| port | 端口 |
+| addr | 绑定地址 |
+| uuid | 认证用途 |
 
 ```json
 {
   "protocol": "vless",
   "port": 5123,
   "addr": "0.0.0.0",
-  "uuid":"xxx-xx-xx-xx-xxx"
+  "uuid": "xxx-xx-xx-xx-xxx"
 }
 ```
 
 ## 客户端
 
-配置存放为客户端二进制文件当前目录的`config.json`或者用户目录下`<userhome>/.gpp/config.json`
+配置存放为客户端二进制文件当前目录的 `config.json`，或者用户目录下 `<userhome>/.gpp/config.json`。
 
-- peer_list 节点列表
-- proxy_dns 代理dns
-- local_dns 直连dns
-- sub_addr 订阅地址
-- rules [代理规则](https://sing-box.sagernet.org/zh/configuration/route/rule)
+| 字段 | 说明 |
+| --- | --- |
+| peer_list | 节点列表 |
+| proxy_dns | 代理 DNS |
+| local_dns | 直连 DNS |
+| sub_addr | 订阅地址 |
+| rules | [代理规则](https://sing-box.sagernet.org/zh/configuration/route/rule) |
 
 ```json
 {
@@ -223,4 +220,12 @@ wails build -m -trimpath -tags webkit2_41,with_quic
     }
   ]
 }
+```
+
+# macOS 修复"已损坏"
+
+安装后在命令行执行：
+
+```bash
+sudo xattr -r -d com.apple.quarantine /Applications/gpp.app
 ```
