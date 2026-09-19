@@ -31,7 +31,9 @@ jobs:
           npm ci
           npm run build
   build-server:
-    permissions: write-all
+    needs: test
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -53,7 +55,9 @@ jobs:
           GOARCH: amd64
           LDFLAGS: '-extldflags "-static"'
   build-client:
-    permissions: write-all
+    needs: build-server
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +104,7 @@ jobs:
         env:
           GOOS: ${{ matrix.build.GOOS }}
           GOARCH: ${{ matrix.build.GOARCH }}
-        run: ~/go/bin/wails build -m -trimpath -tags webkit2_41,with_quic -webview2 embed -o ${{ env.APP_NAME }}.exe
+        run: ~/go/bin/wails build -m -trimpath -tags webkit2_41,with_quic -webview2 embed -ldflags "-X main.version=${{ github.ref_name }}" -o ${{ env.APP_NAME }}.exe
 
       # Compress: macOS
       - name: Create a compressed file for macOS

@@ -81,28 +81,48 @@ func AddPeer(c *Config, token string) error {
 	if c == nil {
 		return errors.New("配置未初始化")
 	}
+	isSub, peers, peer, err := FetchImport(token)
+	if err != nil {
+		return err
+	}
+	return c.ApplyImport(token, isSub, peers, peer)
+}
+
+// FetchImport 完成导入中"可能慢"的部分：订阅地址会联网拉取（最长 15 秒），
+// 节点链接只做本地解析，不读写任何 Config。调用方不应在持有全局状态锁时调用它。
+// 返回的 peers 非空表示订阅导入，peer 非空表示单节点导入。
+func FetchImport(token string) (isSub bool, peers []*Peer, peer *Peer, err error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return errors.New("导入内容为空")
+		return false, nil, nil, errors.New("导入内容为空")
 	}
 	if IsSubAddr(token) {
-		peers, err := fetchSubscription(token)
-		if err != nil {
-			return err
+		fetched, ferr := fetchSubscription(token)
+		if ferr != nil {
+			return false, nil, nil, ferr
 		}
-		c.SubAddr = token
+		return true, fetched, nil, nil
+	}
+	parsed, perr := ParsePeer(token)
+	if perr != nil {
+		return false, nil, nil, perr
+	}
+	return false, nil, parsed, nil
+}
+
+// ApplyImport 把 FetchImport 的结果合并进配置并立即落盘（纯内存+磁盘操作，无网络）。
+// token 仅用于订阅导入时记录订阅地址（应为 FetchImport 收到的原始值）。
+func (c *Config) ApplyImport(token string, isSub bool, peers []*Peer, peer *Peer) error {
+	if isSub {
+		c.SubAddr = strings.TrimSpace(token)
 		c.mergePeers(peers)
 		c.Normalize()
 		c.preferImportedPeer()
-		if err = SaveConfig(c); err != nil {
+		if err := SaveConfig(c); err != nil {
 			return err
 		}
 		_ = writeSubCache(peers)
 		return nil
-	}
-	peer, err := ParsePeer(token)
-	if err != nil {
-		return err
 	}
 	if c.FindPeer(peer.Name) != nil {
 		return fmt.Errorf("节点 %s 已存在", peer.Name)

@@ -4,7 +4,7 @@ builds:
     dir: .
     main: ./cmd/gpp/main.go
     binary: gpp-server
-    ldflags: -s -w
+    ldflags: -s -w -X main.version={{.Version}}
     flags:
       - -tags=with_quic
     goos:

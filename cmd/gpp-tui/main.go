@@ -41,6 +41,9 @@ var (
 	cleanupOnce sync.Once
 )
 
+// version 由构建时 -ldflags "-X main.version=..." 注入（CI 注入 tag 号）。
+var version = "dev"
+
 func recordPanic(where string) {
 	if r := recover(); r != nil {
 		_ = os.WriteFile(filepath.Join(config.UserDir(), "panic.log"),
@@ -414,7 +417,7 @@ func main() {
 
 	state.useANSI = enableANSI()
 
-	attached, err := control.Attach("tui", "dev", filepath.Join(config.UserDir(), "gpp-tui.log"))
+	attached, err := control.Attach("tui", version, filepath.Join(config.UserDir(), "gpp-tui.log"))
 	if err != nil {
 		fmt.Println("!! 无法接入 gpp 控制面:", err)
 		fmt.Println("   如果确认没有其他 gpp 在运行，可删除", control.LockPath(), "后重试")

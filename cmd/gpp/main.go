@@ -10,7 +10,11 @@ import (
 	"syscall"
 )
 
+// version 由构建时 -ldflags "-X main.version=..." 注入（goreleaser 注入 tag 号）。
+var version = "dev"
+
 func main() {
+	fmt.Println("gpp-server version:", version)
 	path := "config.json"
 	home, _ := os.UserHomeDir()
 	if len(os.Args) > 1 {

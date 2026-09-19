@@ -36,8 +36,12 @@ func NewApp() *App {
 	return &App{done: make(chan struct{})}
 }
 
-// buildVersion 返回版本号（优先用构建信息，便于排查"用户跑的到底是哪版"）。
+// buildVersion 返回版本号：优先用 -ldflags 注入的 version 变量（CI 构建会注入 tag 号），
+// 否则退回构建信息，便于排查"用户跑的到底是哪版"。
 func buildVersion() string {
+	if v := strings.TrimSpace(version); v != "" && v != "(devel)" {
+		return v
+	}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if v := strings.TrimSpace(info.Main.Version); v != "" && v != "(devel)" {
 			return v

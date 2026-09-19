@@ -81,22 +81,55 @@ if [ -f gpp ]; then
     log "已存在 gpp 二进制，跳过下载"
 else
     FILE="gpp-linux-${ARCH}.tar.gz"
-    URLS=(
-        "https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
-        "https://ghproxy.net/https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
-        "https://gh-proxy.com/https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
-        "https://ghfast.top/https://github.com/danbai225/gpp/releases/latest/download/${FILE}"
-    )
+
+    # 从 fork 的最新 release 解析资产地址（checksums 文件名带版本号，无法硬编码）。
+    # 解析不到就拒绝安装（fail closed）：宁可装不上，也不跑来源不明的二进制。
+    log "查询最新 release 资产..."
+    RELEASE_JSON=$(curl -fsSL --connect-timeout 10 --retry 2 \
+        https://api.github.com/repos/jantian3n/gpp/releases/latest \
+        || { err "无法访问 GitHub API，无法获取校验信息，已中止安装"; exit 1; })
+    CHECKSUMS_URL=$(printf '%s' "$RELEASE_JSON" \
+        | grep '"browser_download_url"' | grep 'checksums\.txt' \
+        | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
+        | head -n 1 || true)
+    ASSET_URL=$(printf '%s' "$RELEASE_JSON" \
+        | grep '"browser_download_url"' | grep "${FILE}" \
+        | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
+        | head -n 1 || true)
+    [ -n "$CHECKSUMS_URL" ] || { err "未在最新 release 中找到 checksums 文件，已中止安装"; exit 1; }
+    [ -n "$ASSET_URL" ] || { err "未在最新 release 中找到 ${FILE}，已中止安装"; exit 1; }
+
+    # 校验文件很小，直接从解析出的 release 资产地址下载，不走镜像代理
+    CHECKSUMS_FILE="${CHECKSUMS_URL##*/}"
+    log "下载校验文件: ${CHECKSUMS_URL}"
+    curl -fsSL --connect-timeout 10 --retry 2 -o "$CHECKSUMS_FILE" "$CHECKSUMS_URL" \
+        || { err "下载校验文件失败，已中止安装"; exit 1; }
+
+    # 二进制本体较大：直连失败时用镜像代理（仅替换 github.com 域名前缀）作备选
+    URLS=("$ASSET_URL")
+    for MIRROR in ghproxy.net gh-proxy.com ghfast.top; do
+        URLS+=("$(printf '%s' "$ASSET_URL" \
+            | sed "s|^https://github.com/|https://${MIRROR}/https://github.com/|")")
+    done
     ok=""
     for url in "${URLS[@]}"; do
         log "下载服务端: ${url}"
-        if curl -fLO --connect-timeout 10 --retry 1 "$url"; then ok=1; break; fi
+        if curl -fL -o "$FILE" --connect-timeout 10 --retry 1 "$url"; then ok=1; break; fi
         warn "下载失败，尝试下一个源..."
     done
-    [ -n "$ok" ] || { err "所有下载源均失败，请检查网络或将 gpp 二进制手动放到 ${INSTALL_PATH}"; exit 1; }
+    [ -n "$ok" ] || { err "所有下载源均失败，请检查网络或将 gpp 二进制手动放到 ${INSTALL_PATH}"; rm -f "$CHECKSUMS_FILE"; exit 1; }
+
+    # sha256 严格校验：不匹配立即报错退出（fail closed），绝不执行被篡改的二进制
+    log "校验 ${FILE} 的 sha256..."
+    if ! grep " ${FILE}$" "$CHECKSUMS_FILE" | sha256sum -c -; then
+        err "校验失败：${FILE} 与 ${CHECKSUMS_FILE} 记录不符，已拒绝安装（谨防下载源被投毒）"
+        rm -f "$FILE" "$CHECKSUMS_FILE"
+        exit 1
+    fi
+
     tar -xzf "$FILE" gpp-server
     mv gpp-server gpp
-    rm -f "$FILE"
+    rm -f "$FILE" "$CHECKSUMS_FILE"
     chmod +x gpp
 fi
 

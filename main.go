@@ -15,6 +15,9 @@ var assets embed.FS
 //go:embed build/windows/icon.ico
 var logo []byte
 
+// version 由构建时 -ldflags "-X main.version=..." 注入（CI 注入 tag 号）。
+var version = "dev"
+
 // singleInstanceAddr 是 GUI 的单实例端口。先启动的实例在这里监听；后启动的实例
 // 只会让它把窗口显示出来，然后自己直接退出（见 main 开头的探测）。
 // app.go 的托盘初始化也在这个端口上做监听。

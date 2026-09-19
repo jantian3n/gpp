@@ -328,10 +328,15 @@ func (e *Engine) Select(game, httpPeer string) error {
 	return nil
 }
 
-// Import 导入节点链接或订阅地址。
+// Import 导入节点链接或订阅地址。订阅地址的联网拉取（可能长达 15 秒）在锁外完成，
+// 锁内只做内存合并与落盘，避免冻结全部状态查询导致界面卡死。
 func (e *Engine) Import(token string) error {
+	isSub, peers, peer, err := config.FetchImport(token)
+	if err != nil {
+		return err
+	}
 	e.mu.Lock()
-	err := config.AddPeer(e.conf, token)
+	err = e.conf.ApplyImport(token, isSub, peers, peer)
 	e.mu.Unlock()
 	if err != nil {
 		return err
