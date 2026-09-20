@@ -349,12 +349,18 @@ func (e *Engine) Import(token string) error {
 // Delete 删除指定节点（并校正选中节点，不会留下悬空名字）。
 func (e *Engine) Delete(name string) error {
 	e.mu.Lock()
+	name = strings.TrimSpace(name)
+	wasActive := e.conf.GamePeer == name || e.conf.HTTPPeer == name
+	running := e.tunnel != nil
 	err := config.DelPeer(e.conf, name)
 	e.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	e.resolvePeers()
+	if running && wasActive {
+		e.AddWarning("当前使用的节点已删除，但隧道仍在使用旧节点：请重启加速后生效")
+	}
 	e.emit(Event{Type: "peers", Message: "已删除节点：" + name})
 	return nil
 }

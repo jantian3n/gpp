@@ -1,10 +1,17 @@
 package client
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/danbai225/gpp/backend/config"
+	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/cachefile"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 )
 
@@ -47,9 +54,9 @@ func TestRouteDefaultOutboundIsExplicit(t *testing.T) {
 	}
 }
 
-// TestHTTPOutboundExistsForRuleSetDownload 规则集下载 detour 指向 http 出站，
-// 该出站必须真实存在（httpPeer 为 nil 时也要有），否则首次启动下载规则集会失败。
-func TestHTTPOutboundExistsForRuleSetDownload(t *testing.T) {
+// TestRuleSetDownloadUsesGameProxy 规则更新必须固定走 Game 代理。
+// Http 可以被用户明确设为直连；若规则更新跟着 Http 走，GitHub 在受限网络上会超时。
+func TestRuleSetDownloadUsesGameProxy(t *testing.T) {
 	opts := buildTestOptions(t, nil)
 	tags := make(map[string]bool, len(opts.Outbounds))
 	for _, outbound := range opts.Outbounds {
@@ -61,8 +68,100 @@ func TestHTTPOutboundExistsForRuleSetDownload(t *testing.T) {
 		}
 	}
 	for _, ruleSet := range opts.Route.RuleSet {
-		if ruleSet.RemoteOptions.DownloadDetour != httpTag {
-			t.Fatalf("规则集下载 detour 应为 %q，实际 %q", httpTag, ruleSet.RemoteOptions.DownloadDetour)
+		client := ruleSet.RemoteOptions.HTTPClient
+		if client == nil || client.DialerOptions.Detour != proxyTag {
+			t.Fatalf("规则集下载必须走 %q，实际 HTTPClient=%+v", proxyTag, client)
+		}
+		if ruleSet.RemoteOptions.DownloadDetour != "" {
+			t.Fatalf("不应继续使用已弃用的 download_detour，实际 %q", ruleSet.RemoteOptions.DownloadDetour)
+		}
+	}
+}
+
+// TestMarkRuleSetsForRefresh 保留规则内容，只把更新时间标旧：
+// sing-box 随后能立即用缓存启动，并在隧道启动后由 updater 后台拉取新版。
+func TestMarkRuleSetsForRefresh(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.db")
+	store := cachefile.New(context.Background(), log.NewNOPFactory().Logger(), option.CacheFileOptions{Path: path})
+	if err := store.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	wantContent := []byte("cached-rules")
+	for _, tag := range managedRuleSetTags {
+		if err := store.SaveRuleSet(tag, &adapter.SavedBinary{
+			Content:     wantContent,
+			LastUpdated: time.Now(),
+			LastEtag:    "etag",
+			URLHash:     []byte("hash"),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := markRuleSetsForRefresh(path); err != nil {
+		t.Fatal(err)
+	}
+
+	store = cachefile.New(context.Background(), log.NewNOPFactory().Logger(), option.CacheFileOptions{Path: path})
+	if err := store.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, tag := range managedRuleSetTags {
+		got := store.LoadRuleSet(tag)
+		if got == nil {
+			t.Fatalf("规则缓存 %s 丢失", tag)
+		}
+		if string(got.Content) != string(wantContent) || got.LastEtag != "etag" {
+			t.Fatalf("标记刷新不应破坏缓存内容: %+v", got)
+		}
+		if !got.LastUpdated.Before(time.Now().Add(-24*time.Hour)) || got.LastUpdated.IsZero() {
+			t.Fatalf("规则 %s 应被标成非零的过期时间，实际 %s", tag, got.LastUpdated)
+		}
+	}
+}
+
+// TestClientSchedulesRuleRefresh 守住真实接线：Client 每次构造新隧道时都必须把缓存标旧，
+// 不能只留下一个从未被调用的辅助函数。
+func TestClientSchedulesRuleRefresh(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	path := filepath.Join(home, ".gpp", "cache.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := cachefile.New(context.Background(), log.NewNOPFactory().Logger(), option.CacheFileOptions{Path: path})
+	if err := store.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range managedRuleSetTags {
+		if err := store.SaveRuleSet(tag, &adapter.SavedBinary{Content: []byte("cached"), LastUpdated: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	game, httpPeer := testPeers()
+	instance, err := Client(game, httpPeer, "https://1.1.1.1/dns-query", "https://223.5.5.5/dns-query", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = instance.Close()
+
+	store = cachefile.New(context.Background(), log.NewNOPFactory().Logger(), option.CacheFileOptions{Path: path})
+	if err := store.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, tag := range managedRuleSetTags {
+		got := store.LoadRuleSet(tag)
+		if got == nil || !got.LastUpdated.Before(time.Now().Add(-24*time.Hour)) {
+			t.Fatalf("Client 未安排规则 %s 在启动后刷新: %+v", tag, got)
 		}
 	}
 }

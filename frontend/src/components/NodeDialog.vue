@@ -1,11 +1,12 @@
 <script lang="ts" setup>
 import {computed, nextTick, ref, watch} from 'vue'
-import {Add, List, PingAll, SetPeer} from '../../wailsjs/go/main/App'
+import {Add, Del, List, PingAll, SetPeer, Status} from '../../wailsjs/go/main/App'
 import type {config} from '../../wailsjs/go/models'
 import FluentComboBox from './FluentComboBox.vue'
 import InfoBarStack from './InfoBarStack.vue'
 import {useMessages} from '../composables/useMessages'
 import type {ComboOption} from '../types'
+import {canDeletePeer, decideNodeDialogAction, shouldConfirmHTTPDirect} from './nodeDialogLogic'
 
 const props = defineProps<{
   open: boolean
@@ -26,6 +27,8 @@ const httpValue = ref<string>()
 const newUrl = ref('')
 const loading = ref(false)
 const pinging = ref(false)
+const importing = ref(false)
+const deleting = ref<string>()
 
 // 延迟分档沿用旧界面：<60ms 好、<100ms 一般、其余偏差；ping 为 0 表示没测出来
 // （例如只监听 UDP 的 hysteria2），显示成"未测速"而不是 0ms。
@@ -67,20 +70,36 @@ function close() {
   emit('close')
 }
 
-async function importUrl(url: string) {
-  const result = await Add(url)
-  if (result !== 'ok') {
-    messages.error(result)
+async function importUrl() {
+  const action = decideNodeDialogAction(newUrl.value, gameValue.value, httpValue.value)
+  if (action.kind !== 'import') {
+    messages.error(action.kind === 'error' ? action.message : '请输入导入链接')
     return
   }
-  messages.success('导入连接成功')
-  newUrl.value = ''
-  // 导入后立刻刷新列表，不用关掉弹窗再打开才能看到新节点
-  await loadPeers()
-  emit('saved')
+  importing.value = true
+  try {
+    const result = await Add(action.url)
+    if (result !== 'ok') {
+      messages.error(result)
+      return
+    }
+    messages.success('导入连接成功')
+    newUrl.value = ''
+    // 导入后立刻刷新列表，不用关掉弹窗再打开才能看到新节点
+    await loadPeers()
+    emit('saved')
+  } catch (error) {
+    messages.error(`导入失败：${String(error)}`)
+  } finally {
+    importing.value = false
+  }
 }
 
 async function applyPeer(game: string, http: string) {
+  if (shouldConfirmHTTPDirect(game, http) && !window.confirm(
+      'Http 选择“直连”后，境外网页将不经过代理，在受限网络中可能无法打开。\n\n仍要保存吗？')) {
+    return
+  }
   const result = await SetPeer(game, http)
   if (result !== 'ok') {
     messages.error(result)
@@ -95,30 +114,47 @@ async function applyPeer(game: string, http: string) {
 }
 
 function submit() {
-  const url = newUrl.value.trim()
-  const picked = gameValue.value !== undefined || httpValue.value !== undefined
+  const action = decideNodeDialogAction('', gameValue.value, httpValue.value)
+  if (action.kind === 'error') {
+    messages.error(action.message)
+    return
+  }
+  if (action.kind === 'select') {
+    void applyPeer(action.game, action.http)
+  }
+}
 
-  if (url && picked) {
-    messages.error('只能选择一种方式')
+async function deletePeer(peer: config.Peer) {
+  if (!canDeletePeer(peer)) {
+    messages.warning('“直连”是内置路由节点，不能删除')
     return
   }
-  if (!url && !picked) {
-    messages.error('请选择节点，或在下方粘贴导入链接')
+  if (!window.confirm(`确定删除节点“${peer.name}”吗？`)) {
     return
   }
-  if (url) {
-    void importUrl(url)
-    return
+  deleting.value = peer.name
+  try {
+    const result = await Del(peer.name)
+    if (result !== 'ok') {
+      messages.error(result)
+      return
+    }
+    await loadPeers()
+    // 删除当前线路时后端会自动回退；从核心读取最终选择，避免界面留下空值或猜错回退节点。
+    const current = await Status()
+    gameValue.value = current.game_peer?.name
+    httpValue.value = current.http_peer?.name
+    if (current.warning) {
+      messages.warning(current.warning)
+    } else {
+      messages.success(`已删除节点“${peer.name}”`)
+    }
+    emit('saved')
+  } catch (error) {
+    messages.error(`删除失败：${String(error)}`)
+  } finally {
+    deleting.value = undefined
   }
-  if (gameValue.value === undefined) {
-    messages.error('请选择 Game 节点')
-    return
-  }
-  if (httpValue.value === undefined) {
-    messages.error('请选择 Http 节点')
-    return
-  }
-  void applyPeer(gameValue.value, httpValue.value)
 }
 
 async function reping() {
@@ -178,6 +214,27 @@ watch(() => props.open, opened => {
               placeholder="选择分流线路"
               empty-text="还没有节点，请在下方粘贴导入链接"
           />
+          <span
+              v-if="shouldConfirmHTTPDirect(gameValue, httpValue)"
+              class="field__help field__help--warning"
+          >直连不会代理境外网页，部分网站可能无法打开。</span>
+        </div>
+
+        <div class="field">
+          <span class="field__label">已导入节点</span>
+          <div class="peer-list">
+            <div v-for="peer in peers" :key="peer.name" class="peer-row">
+              <span class="peer-row__name" :title="peer.name">{{ peer.name }}</span>
+              <span class="peer-row__protocol">{{ peer.protocol === 'direct' ? '内置' : peer.protocol }}</span>
+              <button
+                  class="btn btn--subtle peer-row__delete"
+                  type="button"
+                  :disabled="!canDeletePeer(peer) || deleting !== undefined || loading"
+                  :title="canDeletePeer(peer) ? `删除 ${peer.name}` : '内置直连节点不能删除'"
+                  @click="deletePeer(peer)"
+              >{{ deleting === peer.name ? '删除中…' : '删除' }}</button>
+            </div>
+          </div>
         </div>
 
         <div class="or"><span class="or__text">或</span></div>
@@ -191,6 +248,14 @@ watch(() => props.open, opened => {
               placeholder="粘贴服务端生成的导入链接或订阅地址"
               spellcheck="false"
           ></textarea>
+          <div class="import-actions">
+            <button
+                class="btn"
+                type="button"
+                :disabled="!newUrl.trim() || importing || deleting !== undefined"
+                @click="importUrl"
+            >{{ importing ? '导入中…' : '导入节点' }}</button>
+          </div>
         </div>
       </div>
 
@@ -206,7 +271,12 @@ watch(() => props.open, opened => {
         </button>
         <span class="dialog__spacer"></span>
         <button class="btn" type="button" @click="close">取消</button>
-        <button class="btn btn--accent" type="button" @click="submit">保存</button>
+        <button
+            class="btn btn--accent"
+            type="button"
+            :disabled="importing || deleting !== undefined || loading"
+            @click="submit"
+        >保存线路</button>
       </div>
     </div>
   </div>
@@ -281,6 +351,64 @@ watch(() => props.open, opened => {
 .field__label {
   font: var(--font-caption);
   color: var(--text-fill-secondary);
+}
+
+.field__help {
+  font: var(--font-caption);
+  color: var(--text-fill-secondary);
+}
+
+.field__help--warning {
+  color: var(--system-fill-caution);
+}
+
+.peer-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 142px;
+  border: 1px solid var(--control-stroke-default);
+  border-radius: var(--control-corner-radius);
+  overflow-y: auto;
+}
+
+.peer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px 4px 10px;
+  background: var(--control-fill-default);
+}
+
+.peer-row + .peer-row {
+  border-top: 1px solid var(--divider-stroke);
+}
+
+.peer-row__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--font-body);
+  color: var(--text-fill-primary);
+}
+
+.peer-row__protocol {
+  flex: 0 0 auto;
+  font: var(--font-caption);
+  color: var(--text-fill-tertiary);
+}
+
+.peer-row__delete {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding-inline: 8px;
+}
+
+.import-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .or {

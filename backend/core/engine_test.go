@@ -186,6 +186,20 @@ func TestEngineSelectDeleteAndNormalize(t *testing.T) {
 	}
 }
 
+func TestEngineDeleteActivePeerWhileRunningWarnsRestart(t *testing.T) {
+	engine := newTestEngine(t, newFakeTunnel())
+	addTestPeer(t, engine, "1.2.3.4")
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Delete("1.2.3.4:443"); err != nil {
+		t.Fatal(err)
+	}
+	if warning := engine.Status().Warning; !strings.Contains(warning, "重启") {
+		t.Fatalf("加速中删除当前节点必须提示重启，实际 %q", warning)
+	}
+}
+
 func TestEngineEventsAndWarnings(t *testing.T) {
 	engine := newTestEngine(t, newFakeTunnel())
 	events, unsubscribe := engine.Subscribe()

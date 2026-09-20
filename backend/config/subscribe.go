@@ -157,6 +157,9 @@ func DelPeer(c *Config, name string) error {
 		return errors.New("配置未初始化")
 	}
 	name = strings.TrimSpace(name)
+	if name == directName {
+		return errors.New("内置直连节点不能删除")
+	}
 	found := false
 	peers := make([]*Peer, 0, len(c.PeerList))
 	for _, p := range c.PeerList {

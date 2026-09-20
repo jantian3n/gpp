@@ -340,6 +340,9 @@ func TestAddPeerAndDelPeer(t *testing.T) {
 	if err := DelPeer(conf, "不存在"); err == nil {
 		t.Fatal("删除不存在的节点应当报错")
 	}
+	if err := DelPeer(conf, "直连"); err == nil {
+		t.Fatal("内置直连节点不允许删除")
+	}
 }
 
 func TestSaveConfigNil(t *testing.T) {

@@ -17,8 +17,11 @@ import (
 	"github.com/danbai225/gpp/backend/config"
 	"github.com/google/uuid"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
 )
@@ -29,6 +32,8 @@ const (
 	httpTag   = "http"
 	directTag = "direct"
 )
+
+var managedRuleSetTags = []string{"geosite-cn", "geosite-geolocation-!cn", "geoip-cn"}
 
 // directOptions 构造直连出站选项。
 // 指定通过本地 DNS 解析目标域名，使其不再是"空出站"：
@@ -238,10 +243,41 @@ func remoteRuleSet(tag, url string) option.RuleSet {
 		Tag:    badoption.Listable[string]{tag},
 		Format: C.RuleSetFormatBinary,
 		RemoteOptions: option.RemoteRuleSet{
-			URL:            url,
-			DownloadDetour: httpTag,
+			URL: url,
+			HTTPClient: &option.HTTPClientOptions{
+				DialerOptions: option.DialerOptions{Detour: proxyTag},
+			},
 		},
 	}
+}
+
+// markRuleSetsForRefresh 保留可立即使用的规则内容，只把更新时间设为很早的非零值。
+// sing-box 因此不会在启动阶段阻塞下载，但 updater 会在隧道启动后马上通过 Game 代理刷新，
+// 达到“每次成功连接都检查新规则；失败仍继续使用旧缓存”的效果。
+func markRuleSetsForRefresh(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	store := cachefile.New(context.Background(), log.NewNOPFactory().Logger(), option.CacheFileOptions{Path: path})
+	if err := store.Start(adapter.StartStateInitialize); err != nil {
+		return err
+	}
+	defer store.Close()
+	staleAt := time.Unix(1, 0)
+	for _, tag := range managedRuleSetTags {
+		saved := store.LoadRuleSet(tag)
+		if saved == nil {
+			continue
+		}
+		saved.LastUpdated = staleAt
+		if err := store.SaveRuleSet(tag, saved); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // logOptions 构造日志配置：默认关闭；设置了 LogOutput 时输出到该文件。
@@ -468,6 +504,9 @@ func BuildOptions(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, ru
 
 // Client 构造并返回可启动的 sing-box 实例（配置由 BuildOptions 生成）。
 func Client(gamePeer, httpPeer *config.Peer, proxyDNS, localDNS string, rules []option.Rule) (*box.Box, error) {
+	// 已有缓存时把它标成待刷新。刷新由 sing-box 在启动后后台完成，不阻塞隧道；
+	// 首次运行没有缓存时仍沿用 sing-box 的初始下载与校验流程。
+	_ = markRuleSetsForRefresh(filepath.Join(config.UserDir(), "cache.db"))
 	opts, err := BuildOptions(gamePeer, httpPeer, proxyDNS, localDNS, rules)
 	if err != nil {
 		return nil, err
